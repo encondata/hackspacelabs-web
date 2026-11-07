@@ -541,6 +541,7 @@ dialog.modal .modal-foot { padding: 16px 20px 20px; display: flex; justify-conte
 }
 .toast.error { border-left: 4px solid var(--error); }
 .toast.success { border-left: 4px solid var(--success); }
+.toast.warning { border-left: 4px solid var(--warning); }
 @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } }
 
 /* ------------------------------------------------------------------ login */

@@ -26,7 +26,15 @@ services:
         condition: service_healthy
     env_file: .env
     environment:
-      KILN_DATABASE_URL: postgresql+asyncpg://kiln:${POSTGRES_PASSWORD:-kiln}@db:5432/kiln
+      # The password is passed separately (not pasted into the URL), so it may contain any character.
+      # To use another database, override KILN_DATABASE_URL; a password written in that URL wins.
+      KILN_DATABASE_URL: postgresql+asyncpg://kiln@db:5432/kiln
+      KILN_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-kiln}
+    # Behind a reverse proxy: set KILN_FORWARDED_ALLOW_IPS in .env to the address or CIDR the proxy connects
+    # from (as seen inside this container). Otherwise every client shares the proxy's IP, so failed logins
+    # from anyone rate-limit everyone. Never use "*" (any client could forge its IP). If the proxy runs on
+    # this machine, publish the port on loopback only, "127.0.0.1:${KILN_PORT:-8000}:8000", so clients
+    # cannot bypass it.
     ports:
       - "${KILN_PORT:-8000}:8000"
 

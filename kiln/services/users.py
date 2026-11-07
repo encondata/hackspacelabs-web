@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kiln.core.config import get_settings
 from kiln.core.permissions import SYSTEM_ROLES
-from kiln.core.security import MIN_PASSWORD_LENGTH, hash_password
+from kiln.core.security import MIN_PASSWORD_LENGTH, hash_password_async
 from kiln.models import Role, User, user_roles
 
 log = logging.getLogger(__name__)
+
+# pg_advisory_xact_lock key shared by the first-admin and last-admin checks.
+_ACCOUNTS_LOCK_KEY = 0x6B696C6E
 
 
 class UserError(ValueError):
@@ -49,6 +52,15 @@ async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
     return await db.scalar(select(User).where(User.email == email.strip().lower()))
 
 
+async def lock_accounts(db: AsyncSession) -> None:
+    """Serialise first-admin / last-admin decisions until this transaction ends.
+
+    PostgreSQL only; elsewhere (SQLite in tests and previews) this is a no-op.
+    """
+    if db.get_bind().dialect.name == "postgresql":
+        await db.execute(text(f"SELECT pg_advisory_xact_lock({_ACCOUNTS_LOCK_KEY})"))
+
+
 def check_password_strength(password: str) -> None:
     if len(password) < MIN_PASSWORD_LENGTH:
         raise UserError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
@@ -63,21 +75,33 @@ async def create_user(
     role_names: list[str] | None = None,
     avatar_url: str | None = None,
 ) -> User:
-    """Create a user. The very first account always becomes an admin."""
+    """Create a user. The very first account always becomes an admin.
+
+    ``role_names=None`` gives the default role; an empty list gives no roles.
+    """
     email = email.strip().lower()
-    if await get_user_by_email(db, email):
-        raise UserError("An account with this email already exists")
     if password is not None:
         check_password_strength(password)
+    # Hash before the first query, so a caller that has not used ``db`` yet holds no pooled
+    # connection while queuing for argon2.
+    password_hash = await hash_password_async(password) if password else None
+    if await get_user_by_email(db, email):
+        raise UserError("An account with this email already exists")
 
+    await lock_accounts(db)
     first_user = await user_count(db) == 0
-    names = ["admin"] if first_user else (role_names or [get_settings().default_role])
+    if first_user:
+        names = ["admin"]
+    elif role_names is None:
+        names = [get_settings().default_role]
+    else:
+        names = role_names
     roles = [await get_role(db, n) for n in dict.fromkeys(names)]
 
     user = User(
         email=email,
         full_name=full_name.strip(),
-        password_hash=hash_password(password) if password else None,
+        password_hash=password_hash,
         avatar_url=avatar_url,
         roles=roles,
         oauth_accounts=[],
@@ -104,7 +128,10 @@ async def admin_count(db: AsyncSession, *, exclude_user_id=None) -> int:
 
 async def ensure_not_last_admin(db: AsyncSession, user: User) -> None:
     """Raise if removing admin rights from / deactivating ``user`` would leave no admins."""
-    if "admin" in user.role_names and await admin_count(db, exclude_user_id=user.id) == 0:
+    if "admin" not in user.role_names:
+        return
+    await lock_accounts(db)
+    if await admin_count(db, exclude_user_id=user.id) == 0:
         raise UserError("This is the last active admin; promote someone else first")
 
 
@@ -112,9 +139,20 @@ async def bootstrap(db: AsyncSession) -> None:
     """Startup hook: seed roles and create the env-configured admin on an empty database."""
     await seed_system_roles(db)
     settings = get_settings()
+    if await db.scalar(select(Role.id).where(Role.name == settings.default_role)) is None:
+        log.error("KILN_DEFAULT_ROLE=%s is not an existing role; sign-ups will fail until it is created", settings.default_role)
     if settings.admin_email and settings.admin_password and await user_count(db) == 0:
-        await create_user(
-            db, email=settings.admin_email, password=settings.admin_password, full_name="Administrator"
-        )
-        log.info("Bootstrapped admin account %s from KILN_ADMIN_EMAIL", settings.admin_email)
+        try:
+            await create_user(
+                db, email=settings.admin_email, password=settings.admin_password, full_name="Administrator"
+            )
+        except UserError as exc:
+            # Keep serving: a crash here would restart the container forever.
+            log.error(
+                "Admin account %s from KILN_ADMIN_EMAIL was not created: %s. "
+                "Fix KILN_ADMIN_PASSWORD and restart, or run `kiln create-admin`.",
+                settings.admin_email, exc,
+            )
+        else:
+            log.info("Bootstrapped admin account %s from KILN_ADMIN_EMAIL", settings.admin_email)
     await db.commit()

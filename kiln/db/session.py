@@ -20,6 +20,9 @@ def init_engine(url: str | None = None, echo: bool | None = None) -> AsyncEngine
     settings = get_settings()
     url = url or settings.database_url
     kwargs: dict[str, object] = {"echo": settings.database_echo if echo is None else echo}
+    if settings.env == "production":
+        # Keep bound values (pasted private keys, passwords) out of exception text and logs.
+        kwargs["hide_parameters"] = True
     if url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
     else:

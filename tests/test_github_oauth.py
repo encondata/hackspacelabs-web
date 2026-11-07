@@ -18,7 +18,7 @@ PROFILE = {"id": 1001, "login": "octocat", "name": "Mona Octocat", "avatar_url":
 class FakeGH:
     profile = PROFILE
     email = ("mona@example.com", True)
-    orgs: set[str] = set()
+    orgs: list[dict] = []
 
     def __init__(self, token):
         assert token == "gho_test"
@@ -35,7 +35,7 @@ class FakeGH:
     async def get_primary_email(self):
         return self.email
 
-    async def get_org_logins(self):
+    async def get_orgs(self):
         return self.orgs
 
 
@@ -47,7 +47,7 @@ def fake_github(monkeypatch):
 
     monkeypatch.setattr(oauth, "exchange_code", exchange)
     monkeypatch.setattr(oauth, "GitHubClient", FakeGH)
-    FakeGH.profile, FakeGH.email, FakeGH.orgs = PROFILE, ("mona@example.com", True), set()
+    FakeGH.profile, FakeGH.email, FakeGH.orgs = PROFILE, ("mona@example.com", True), []
 
 
 async def _start(client, path="/auth/github/login?next=/hosts") -> str:
@@ -77,13 +77,13 @@ async def test_unknown_user_blocked_once_kiln_has_users(client):
     await make_user("admin@example.com")
     state = await _start(client)
     r = await client.get(f"/auth/github/callback?code=good-code&state={state}")
-    assert "not+allowed" in r.headers["location"] or "not%20allowed" in r.headers["location"]
+    assert r.headers["location"] == "/login?error=not_allowed&login=octocat"
 
 
 async def test_allowlisted_org_can_sign_up(client, monkeypatch):
     await make_user("admin@example.com")
     monkeypatch.setattr(get_settings(), "github_allowed_orgs", ["acme"])
-    FakeGH.orgs = {"acme"}
+    FakeGH.orgs = [{"id": 77, "login": "Acme"}]
     state = await _start(client)
     await client.get(f"/auth/github/callback?code=good-code&state={state}")
     me = (await client.get("/api/v1/auth/me")).json()["user"]
@@ -96,7 +96,7 @@ async def test_email_collision_does_not_auto_link(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "github_allowed_users", ["octocat"])
     state = await _start(client)
     r = await client.get(f"/auth/github/callback?code=good-code&state={state}")
-    assert r.headers["location"].startswith("/login?error=")
+    assert r.headers["location"] == "/login?error=email_in_use"
     assert (await client.get("/api/v1/auth/me")).status_code == 401
 
 
@@ -116,7 +116,8 @@ async def test_link_then_sign_in_with_github(client, make_client):
 
 async def test_open_redirect_blocked(client):
     r = await client.get("/auth/github/login?next=//evil.example")
-    payload = json.loads(base64.urlsafe_b64decode(r.cookies[oauth.STATE_COOKIE]))
+    body = r.cookies[oauth.STATE_COOKIE].partition(".")[0]
+    payload = json.loads(base64.urlsafe_b64decode(body))
     assert payload["n"] == "/"
     assert oauth.safe_next("/\\evil.example") == "/"
     assert oauth.safe_next("/instances?x=1") == "/instances?x=1"

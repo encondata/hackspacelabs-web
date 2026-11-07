@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from kiln.core.config import get_settings
 from kiln.db.base import utcnow
 from kiln.models import Repository, User
-from kiln.services.github import GitHubClient, _parse_dt, detect_many
+from kiln.services.github import GitHubClient, RepoRef, _parse_dt, detect_many
 
 
 class GitHubNotLinked(RuntimeError):
@@ -25,9 +25,13 @@ class SyncResult:
 
 
 def github_token_for(user: User | None) -> tuple[str | None, str]:
-    """Return (token, description) to use for GitHub calls made on behalf of ``user``."""
-    if user is not None and user.github and user.github.access_token:
-        return user.github.access_token, f"@{user.github.login}"
+    """Return (token, description) to use for GitHub calls made on behalf of ``user``.
+
+    A linked account whose token is missing or could not be decrypted counts as not linked.
+    """
+    account = user.github if user is not None else None
+    if account is not None and account.access_token:
+        return account.access_token, f"@{account.login}"
     service = get_settings().github_service_token
     if service:
         return service, "the Kiln service token"
@@ -42,7 +46,8 @@ async def sync_repositories(db: AsyncSession, user: User, *, client: GitHubClien
     own_client = client is None
     client = client or GitHubClient(account.access_token)
     try:
-        remote = await client.list_repos()
+        # Offset pagination sorted by push time can return a repo twice; keep one per id.
+        remote = list({g["id"]: g for g in await client.list_repos()}.values())
         existing = {
             r.github_id: r
             for r in (
@@ -51,8 +56,8 @@ async def sync_repositories(db: AsyncSession, user: User, *, client: GitHubClien
         }
         now = utcnow()
         created = updated = 0
-        needs_detection: list[tuple[str, str]] = []
-        by_name: dict[str, Repository] = {}
+        needs_detection: list[tuple[RepoRef, str]] = []
+        by_id: dict[RepoRef, Repository] = {}
 
         for data in remote:
             repo = existing.get(data["id"])
@@ -64,25 +69,26 @@ async def sync_repositories(db: AsyncSession, user: User, *, client: GitHubClien
             else:
                 updated += 1
             changed = repo.pushed_at != pushed_at or repo.detected_at is None
-            repo.full_name = data["full_name"]
-            repo.owner = data["owner"]["login"]
-            repo.name = data["name"]
+            # Clip to the column widths: PostgreSQL rejects over-long VARCHAR values.
+            repo.full_name = data["full_name"][:200]
+            repo.owner = data["owner"]["login"][:100]
+            repo.name = data["name"][:100]
             repo.description = data.get("description") or ""
-            repo.visibility = data.get("visibility") or ("private" if data.get("private") else "public")
-            repo.default_branch = data.get("default_branch") or "main"
-            repo.html_url = data["html_url"]
-            repo.language = data.get("language")
+            repo.visibility = (data.get("visibility") or ("private" if data.get("private") else "public"))[:16]
+            repo.default_branch = (data.get("default_branch") or "main")[:100]
+            repo.html_url = data["html_url"][:300]
+            repo.language = (data.get("language") or "")[:50] or None
             repo.archived = bool(data.get("archived"))
             repo.pushed_at = pushed_at
             repo.synced_at = now
             repo.synced_by_id = user.id
-            by_name[repo.full_name] = repo
+            by_id[repo.github_id] = repo
             if changed and not repo.archived:
-                needs_detection.append((repo.full_name, repo.default_branch))
+                needs_detection.append((repo.github_id, repo.default_branch))
 
-        for full_name, config in (await detect_many(client, needs_detection)).items():
-            by_name[full_name].detected_config = config
-            by_name[full_name].detected_at = now
+        for github_id, config in (await detect_many(client, needs_detection)).items():
+            by_id[github_id].detected_config = config
+            by_id[github_id].detected_at = now
 
         await db.commit()
         return SyncResult(created=created, updated=updated, total=len(remote))

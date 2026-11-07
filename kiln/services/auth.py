@@ -13,11 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from kiln.core.config import get_settings
 from kiln.core.security import (
     API_TOKEN_PREFIX,
-    hash_password,
+    hash_password_async,
     hash_token,
     new_token,
     password_needs_rehash,
-    verify_password,
+    verify_password_async,
 )
 from kiln.db.base import utcnow
 from kiln.models import ApiToken, User, UserSession
@@ -44,12 +44,16 @@ class AuthContext:
 
 
 async def authenticate_password(db: AsyncSession, email: str, password: str) -> User | None:
+    """Check an email/password pair. Commits the (read-only) transaction before hashing."""
     user = await db.scalar(select(User).where(User.email == email.strip().lower()))
-    ok = verify_password(password, user.password_hash if user else None)
+    # Hand the pooled connection back while queuing for argon2, so a login burst cannot
+    # starve every other request (and the background tasks) of database connections.
+    await db.commit()
+    ok = await verify_password_async(password, user.password_hash if user else None)
     if not (user and ok and user.is_active):
         return None
     if user.password_hash and password_needs_rehash(user.password_hash):
-        user.password_hash = hash_password(password)
+        user.password_hash = await hash_password_async(password)
     return user
 
 
@@ -123,3 +127,13 @@ async def revoke_user_sessions(db: AsyncSession, user: User, *, keep: UserSessio
     if keep is not None:
         stmt = stmt.where(UserSession.id != keep.id)
     await db.execute(stmt)
+
+
+async def revoke_user_tokens(db: AsyncSession, user: User) -> None:
+    await db.execute(delete(ApiToken).where(ApiToken.user_id == user.id))
+
+
+async def revoke_user_credentials(db: AsyncSession, user: User) -> None:
+    """Sign the user out everywhere and delete their API tokens (admin reset, deactivation)."""
+    await revoke_user_sessions(db, user)
+    await revoke_user_tokens(db, user)

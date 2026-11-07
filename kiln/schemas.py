@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
@@ -15,6 +15,12 @@ from kiln.services import deployer
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")
 _VOLUME_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+# List items are bounded like the columns they end up in (roles.name is String(64)).
+RoleName = Annotated[str, Field(max_length=64)]
+Permission = Annotated[str, Field(max_length=64)]
+EnvKey = Annotated[str, Field(max_length=255)]
+EnvValue = Annotated[str, Field(max_length=32768)]
 
 
 class Out(BaseModel):
@@ -30,7 +36,7 @@ class LoginIn(BaseModel):
 
 
 class RegisterIn(BaseModel):
-    email: EmailStr
+    email: EmailStr = Field(max_length=320)
     password: str = Field(max_length=500)
     full_name: str = Field("", max_length=200)
 
@@ -40,7 +46,7 @@ class ProfileUpdate(BaseModel):
 
 
 class PasswordChange(BaseModel):
-    current_password: str | None = None
+    current_password: str | None = Field(None, max_length=500)
     new_password: str = Field(max_length=500)
 
 
@@ -85,18 +91,18 @@ class SessionOut(BaseModel):
 
 
 class UserCreate(BaseModel):
-    email: EmailStr
+    email: EmailStr = Field(max_length=320)
     full_name: str = Field("", max_length=200)
     password: str | None = Field(None, max_length=500)
     # Pre-link a GitHub account so the user can sign in with GitHub straight away.
     github_login: str | None = Field(None, max_length=39, pattern=r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
-    roles: list[str] = Field(default_factory=lambda: ["viewer"])
+    roles: list[RoleName] = Field(default_factory=lambda: ["viewer"], max_length=50)
 
 
 class UserUpdate(BaseModel):
     full_name: str | None = Field(None, max_length=200)
     is_active: bool | None = None
-    roles: list[str] | None = None
+    roles: list[RoleName] | None = Field(None, max_length=50)
     password: str | None = Field(None, max_length=500)
 
 
@@ -114,7 +120,7 @@ class RoleOut(Out):
 class RoleIn(BaseModel):
     name: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
     description: str = Field("", max_length=255)
-    permissions: list[str]
+    permissions: list[Permission] = Field(max_length=200)
 
     @field_validator("permissions")
     @classmethod
@@ -124,7 +130,7 @@ class RoleIn(BaseModel):
 
 class RoleUpdate(BaseModel):
     description: str | None = Field(None, max_length=255)
-    permissions: list[str] | None = None
+    permissions: list[Permission] | None = Field(None, max_length=200)
 
     @field_validator("permissions")
     @classmethod
@@ -188,7 +194,7 @@ class _HostFields(BaseModel):
     username: str | None = Field(None, min_length=1, max_length=64, pattern=r"^[a-z_][a-z0-9_.-]*$")
     environment: str | None = Field(None, max_length=32)
     description: str | None = Field(None, max_length=255)
-    deploy_root: str | None = None
+    deploy_root: str | None = Field(None, max_length=255)
     private_key: str | None = Field(None, max_length=20000)
     key_passphrase: str | None = Field(None, max_length=500)
     password: str | None = Field(None, max_length=500)
@@ -197,6 +203,16 @@ class _HostFields(BaseModel):
     @classmethod
     def _root(cls, v: str | None) -> str | None:
         return None if v is None else deployer.clean_deploy_root(v)
+
+    @field_validator("hostname")
+    @classmethod
+    def _hostname(cls, v: str | None) -> str | None:
+        if v is None or ":" in v or v.startswith("["):  # IPv6 literals are checked when connecting
+            return v
+        labels = v.rstrip(".").split(".")
+        if not all(0 < len(label) <= 63 and not label.startswith("-") for label in labels):
+            raise ValueError("Enter a valid hostname or IP address")
+        return v
 
 
 class HostCreate(_HostFields):
@@ -277,12 +293,12 @@ class VolumeMapping(BaseModel):
 class _InstanceFields(BaseModel):
     branch: str | None = Field(None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._/-]+$")
     build_source: Literal["dockerfile", "compose"] | None = None
-    dockerfile_path: str | None = None
-    build_context: str | None = None
-    compose_file: str | None = None
-    env: dict[str, str] | None = None
-    ports: list[PortMapping] | None = None
-    volumes: list[VolumeMapping] | None = None
+    dockerfile_path: str | None = Field(None, max_length=255)
+    build_context: str | None = Field(None, max_length=255)
+    compose_file: str | None = Field(None, max_length=255)
+    env: dict[EnvKey, EnvValue] | None = Field(None, max_length=500)
+    ports: list[PortMapping] | None = Field(None, max_length=100)
+    volumes: list[VolumeMapping] | None = Field(None, max_length=100)
 
     @field_validator("dockerfile_path", "compose_file")
     @classmethod

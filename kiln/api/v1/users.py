@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -10,11 +11,11 @@ from sqlalchemy import select
 
 from kiln.api.deps import DB, not_found, require
 from kiln.core.permissions import Perm, has_permission
-from kiln.core.security import hash_password
-from kiln.models import OAuthAccount, Role, User
-from kiln.schemas import UserCreate, UserOut, UserUpdate
+from kiln.core.security import hash_password_async
+from kiln.models import ApiToken, OAuthAccount, Role, User
+from kiln.schemas import TokenOut, UserCreate, UserOut, UserUpdate
 from kiln.services import audit
-from kiln.services.auth import AuthContext, revoke_user_sessions
+from kiln.services.auth import AuthContext, revoke_user_credentials
 from kiln.services.github import GitHubClient, GitHubError
 from kiln.services.repos import github_token_for
 from kiln.services.users import UserError, check_password_strength, create_user, ensure_not_last_admin
@@ -25,15 +26,25 @@ Reader = Annotated[AuthContext, require(Perm.USERS_READ)]
 Writer = Annotated[AuthContext, require(Perm.USERS_WRITE)]
 
 
+def _check_grantable(roles: Iterable[Role], actor: User, verb: str = "grant") -> None:
+    # No privilege escalation: you may only grant or take away permissions you hold yourself.
+    for role in roles:
+        if not all(has_permission(actor.permissions, p) for p in role.permissions):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"You cannot {verb} the '{role.name}' role")
+
+
+def _ensure_can_manage(actor: User, target: User) -> None:
+    """users:write only reaches users whose every permission the actor holds too."""
+    if target.id != actor.id and not all(has_permission(actor.permissions, p) for p in target.permissions):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot manage a user who has permissions you don't have")
+
+
 async def _roles(db: DB, names: list[str], actor: User) -> list[Role]:
     roles = (await db.scalars(select(Role).where(Role.name.in_(names)))).all()
     missing = set(names) - {r.name for r in roles}
     if missing:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown role(s): {', '.join(sorted(missing))}")
-    # No privilege escalation: you may only grant permissions you hold yourself.
-    for role in roles:
-        if not all(has_permission(actor.permissions, p) for p in role.permissions):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, f"You cannot grant the '{role.name}' role")
+    _check_grantable(roles, actor)
     return list(roles)
 
 
@@ -52,11 +63,14 @@ async def list_users(ctx: Reader, db: DB) -> list[UserOut]:
 
 async def _resolve_github(db: DB, login: str, actor: User) -> OAuthAccount:
     token, _ = github_token_for(actor)
+    await db.commit()  # don't hold a pooled connection across the GitHub call
     try:
         async with GitHubClient(token) as gh:
             profile = await gh.get_user_by_login(login)
     except GitHubError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"GitHub user @{login} not found") from exc
+        if exc.status_code == 404:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"GitHub user @{login} not found") from exc
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Could not reach GitHub; try again") from exc
     gh_id = str(profile["id"])
     taken = await db.scalar(
         select(OAuthAccount).where(OAuthAccount.provider == "github", OAuthAccount.provider_user_id == gh_id)
@@ -73,6 +87,7 @@ async def create(body: UserCreate, ctx: Writer, request: Request, db: DB) -> Use
     await _roles(db, body.roles, ctx.user)
     account = await _resolve_github(db, body.github_login, ctx.user) if body.github_login else None
     try:
+        # An empty roles list means no roles; create_user only fills in the default for None.
         user = await create_user(
             db, email=str(body.email), password=body.password, full_name=body.full_name, role_names=body.roles
         )
@@ -93,9 +108,20 @@ async def get_user(user_id: uuid.UUID, ctx: Reader, db: DB) -> UserOut:
 @router.patch("/{user_id}")
 async def update(user_id: uuid.UUID, body: UserUpdate, ctx: Writer, request: Request, db: DB) -> UserOut:
     user = await _get(db, user_id)
+    _ensure_can_manage(ctx.user, user)
+    if body.password and user.id == ctx.user.id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Change your own password from your profile (POST /api/v1/auth/me/password)"
+        )
+    revoke = False
     try:
+        password_hash = None
+        if body.password:
+            check_password_strength(body.password)
+            password_hash = await hash_password_async(body.password)
         if body.roles is not None:
             new_roles = await _roles(db, body.roles, ctx.user)
+            _check_grantable([r for r in user.roles if r.name not in body.roles], ctx.user, "remove")
             if "admin" not in body.roles:
                 await ensure_not_last_admin(db, user)
             user.roles = new_roles
@@ -104,19 +130,23 @@ async def update(user_id: uuid.UUID, body: UserUpdate, ctx: Writer, request: Req
                 raise UserError("You cannot deactivate your own account")
             if not body.is_active:
                 await ensure_not_last_admin(db, user)
-                await revoke_user_sessions(db, user)
+                revoke = True
             user.is_active = body.is_active
         if body.full_name is not None:
             user.full_name = body.full_name.strip()
-        if body.password:
-            check_password_strength(body.password)
-            user.password_hash = hash_password(body.password)
-            await revoke_user_sessions(db, user)
+        if password_hash is not None:
+            user.password_hash = password_hash
+            revoke = True
     except UserError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    if revoke:
+        # A reset or deactivation must cut off every credential, API tokens included.
+        await revoke_user_credentials(db, user)
+    details = body.model_dump(exclude_none=True, exclude={"password"})
+    if body.password:
+        details["password_reset"] = True
     audit.record(
-        db, "user.update", actor=ctx.user, target=user, summary=f"Updated {user.email}",
-        details=body.model_dump(exclude_none=True, exclude={"password"}), request=request,
+        db, "user.update", actor=ctx.user, target=user, summary=f"Updated {user.email}", details=details, request=request
     )
     await db.commit()
     await db.refresh(user)
@@ -128,10 +158,36 @@ async def delete(user_id: uuid.UUID, ctx: Writer, request: Request, db: DB) -> N
     user = await _get(db, user_id)
     if user.id == ctx.user.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot delete your own account")
+    _ensure_can_manage(ctx.user, user)
     try:
         await ensure_not_last_admin(db, user)
     except UserError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     audit.record(db, "user.delete", actor=ctx.user, target=user, summary=f"Deleted {user.email}", request=request)
     await db.delete(user)
+    await db.commit()
+
+
+@router.get("/{user_id}/tokens")
+async def list_user_tokens(user_id: uuid.UUID, ctx: Writer, db: DB) -> list[TokenOut]:
+    user = await _get(db, user_id)
+    _ensure_can_manage(ctx.user, user)
+    tokens = await db.scalars(
+        select(ApiToken).where(ApiToken.user_id == user.id).order_by(ApiToken.created_at.desc())
+    )
+    return [TokenOut.model_validate(t) for t in tokens]
+
+
+@router.delete("/{user_id}/tokens/{token_id}", status_code=204)
+async def revoke_user_token(user_id: uuid.UUID, token_id: uuid.UUID, ctx: Writer, request: Request, db: DB) -> None:
+    user = await _get(db, user_id)
+    _ensure_can_manage(ctx.user, user)
+    token = await db.get(ApiToken, token_id)
+    if token is None or token.user_id != user.id:
+        raise not_found("Token")
+    audit.record(
+        db, "token.revoke", actor=ctx.user, target=token,
+        summary=f"Revoked API token {token.name} of {user.email}", request=request,
+    )
+    await db.delete(token)
     await db.commit()

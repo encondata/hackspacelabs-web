@@ -15,11 +15,15 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import Text, column, select, table
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from kiln import __version__
 from kiln.api.v1 import api_router
 from kiln.core.config import get_settings
+from kiln.core.crypto import DecryptionError, decrypt, encrypted_columns
+from kiln.db.base import Base
 from kiln.db.session import dispose_engine, get_sessionmaker, init_engine
 from kiln.services.deployer import runner
 from kiln.services.hosts import poll_hosts_forever
@@ -36,11 +40,32 @@ CSP = (
 )
 
 
+async def check_encryption_key(db: AsyncSession) -> bool:
+    """Try one stored secret per encrypted column so a wrong KILN_ENCRYPTION_KEY is reported at startup."""
+    for source, col in encrypted_columns(Base.metadata):
+        raw = table(source.name, column(col.name, Text())).c[col.name]
+        token = await db.scalar(select(raw).where(raw.is_not(None)).limit(1))
+        if token is None:
+            continue
+        try:
+            decrypt(token)
+        except DecryptionError:
+            log.error(
+                "KILN_ENCRYPTION_KEY cannot decrypt stored secrets (tried %s.%s), so they read as empty. "
+                "Add the old key after the new one (comma-separated) and run `kiln rotate-encryption-key`, "
+                "or re-enter the secrets.",
+                source.name, col.name,
+            )
+            return False
+    return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_engine()
     async with get_sessionmaker()() as db:
         await bootstrap(db)
+        await check_encryption_key(db)
     await runner.recover_interrupted()
     poller = asyncio.create_task(poll_hosts_forever(), name="host-poller")
     log.info("Kiln %s started (%s)", __version__, get_settings().env)

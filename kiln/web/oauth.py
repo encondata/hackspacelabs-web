@@ -3,20 +3,29 @@
 Rules for an unknown GitHub identity signing in:
 
 * Already linked to a Kiln user -> sign in as that user.
-* Otherwise an account is created only if self-signup is enabled, or the GitHub login /
-  one of its orgs is allow-listed (``KILN_GITHUB_ALLOWED_USERS`` / ``_ORGS``), or Kiln has
-  no users yet (the first account becomes admin).
+* Otherwise an account is created only if self-signup is enabled, or the GitHub user /
+  one of its orgs is allow-listed (``KILN_GITHUB_ALLOWED_USERS`` / ``_ORGS``, by name or as
+  ``id:<number>``), or no allowlist is set and Kiln has no users yet (the first account
+  becomes admin).
 * GitHub is never auto-linked to an existing account by email: sign in with your password
   and link GitHub from Settings instead. This prevents account takeover via email reuse.
+
+The state cookie is signed with ``KILN_SECRET_KEY``, and a link request's state carries an
+HMAC of the session that started it, so a planted cookie cannot link GitHub to another
+account. Failures redirect with ``?error=<code>`` (plus ``&login=<github login>`` for some).
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import logging
+import re
 import secrets
-from urllib.parse import quote
+from typing import Any
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -25,44 +34,85 @@ from sqlalchemy.orm import joinedload
 
 from kiln.api.deps import DB, OptionalAuth
 from kiln.core.config import get_settings
-from kiln.models import OAuthAccount
+from kiln.models import OAuthAccount, User, UserSession
 from kiln.services import audit
 from kiln.services.auth import create_session, set_session_cookie
 from kiln.services.github import GitHubClient, GitHubError, authorize_url, exchange_code
-from kiln.services.users import UserError, create_user, user_count
+from kiln.services.users import UserError, create_user, get_user_by_email, user_count
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth/github", include_in_schema=False)
 
 STATE_COOKIE = "kiln_oauth"
+GITHUB_LOGIN = re.compile(r"[A-Za-z0-9-]{1,39}")
 
 
 def safe_next(value: str | None) -> str:
     """Only allow same-site relative redirects."""
     if not value or not value.startswith("/") or value.startswith("//") or "\\" in value:
         return "/"
+    # Browsers drop tabs and newlines before parsing, so "/\t/evil.example" is "//evil.example".
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+        return "/"
+    parts = urlsplit(value)
+    if parts.scheme or parts.netloc:
+        return "/"
     return value
 
 
-def _start(mode: str, next_url: str) -> RedirectResponse:
+def _sign(*parts: str) -> str:
+    message = "|".join(("kiln-oauth", *parts)).encode()
+    return hmac.new(get_settings().secret_key.encode(), message, hashlib.sha256).hexdigest()
+
+
+def _same(a: str, b: str) -> bool:
+    return hmac.compare_digest(a.encode(), b.encode())
+
+
+def _link_binding(session: UserSession, nonce: str) -> str:
+    return _sign("link", session.token_hash, nonce)
+
+
+def _start(mode: str, next_url: str, session: UserSession | None = None) -> RedirectResponse:
     settings = get_settings()
     if not settings.github_enabled:
         raise HTTPException(404, "GitHub sign-in is not configured")
-    state = secrets.token_urlsafe(24)
-    payload = base64.urlsafe_b64encode(json.dumps({"s": state, "m": mode, "n": safe_next(next_url)}).encode())
+    nonce = secrets.token_urlsafe(24)
+    state = f"{nonce}.{_link_binding(session, nonce)}" if session else nonce
+    body = base64.urlsafe_b64encode(json.dumps({"s": state, "m": mode, "n": safe_next(next_url)}).encode()).decode()
     response = RedirectResponse(authorize_url(state), status_code=302)
     response.set_cookie(
-        STATE_COOKIE, payload.decode(), max_age=600, httponly=True,
+        STATE_COOKIE, f"{body}.{_sign('cookie', body)}", max_age=600, httponly=True,
         secure=settings.secure_cookies, samesite="lax", path="/auth/github",
     )
     return response
 
 
-def _fail(message: str, mode: str = "login") -> RedirectResponse:
+def _read_state_cookie(request: Request) -> dict[str, Any]:
+    """The state cookie's payload, or {} when it is missing, malformed or not signed by us."""
+    body, _, signature = request.cookies.get(STATE_COOKIE, "").partition(".")
+    try:
+        if not signature or not _same(signature, _sign("cookie", body)):
+            return {}
+        data = json.loads(base64.urlsafe_b64decode(body))
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _fail(code: str, mode: str = "login", login: str | None = None) -> RedirectResponse:
+    params = {"error": code}
+    if login and GITHUB_LOGIN.fullmatch(login):
+        params["login"] = login
     target = "/settings" if mode == "link" else "/login"
-    response = RedirectResponse(f"{target}?error={quote(message)}", status_code=302)
+    response = RedirectResponse(f"{target}?{urlencode(params)}", status_code=302)
     response.delete_cookie(STATE_COOKIE, path="/auth/github")
     return response
+
+
+def _avatar(profile: dict[str, Any]) -> str | None:
+    url = profile.get("avatar_url")
+    return url if isinstance(url, str) and len(url) <= 500 else None
 
 
 @router.get("/login")
@@ -72,96 +122,115 @@ async def github_login(next: str = "/") -> RedirectResponse:
 
 @router.get("/link")
 async def github_link(ctx: OptionalAuth) -> RedirectResponse:
-    if ctx is None:
+    if ctx is None or ctx.session is None:
         return RedirectResponse("/login?next=/settings", status_code=302)
-    return _start("link", "/settings")
+    return _start("link", "/settings", ctx.session)
 
 
-async def _signup_allowed(db: DB, gh: GitHubClient, login: str) -> bool:
+def _allowlisted(entries: list[str], identity: dict[str, Any]) -> bool:
+    """Entries are lowercased names (which GitHub lets people change) or ``id:<number>``."""
+    ids = {e for e in entries if e.startswith("id:")}
+    names = set(entries) - ids
+    return f"id:{identity.get('id')}" in ids or str(identity.get("login", "")).lower() in names
+
+
+async def _signup_allowed(db: DB, gh: GitHubClient, profile: dict[str, Any]) -> bool:
     settings = get_settings()
-    if settings.allow_signup or await user_count(db) == 0:
+    users, orgs = settings.github_allowed_users, settings.github_allowed_orgs
+    if settings.allow_signup or _allowlisted(users, profile):
         return True
-    if login.lower() in settings.github_allowed_users:
-        return True
-    if settings.github_allowed_orgs:
+    if orgs:
         try:
-            orgs = await gh.get_org_logins()
-        except GitHubError:
+            memberships = await gh.get_orgs()
+        except GitHubError as exc:
+            if exc.transient:  # a hiccup: the callback reports a retryable failure
+                raise
             return False
-        return bool(orgs & set(settings.github_allowed_orgs))
-    return False
+        return any(_allowlisted(orgs, org) for org in memberships)
+    # Only with no allowlist configured may anyone claim the first (admin) account.
+    return not users and await user_count(db) == 0
 
 
 @router.get("/callback")
 async def github_callback(
     request: Request, db: DB, ctx: OptionalAuth, code: str = "", state: str = "", error: str = ""
 ) -> RedirectResponse:
-    try:
-        cookie = json.loads(base64.urlsafe_b64decode(request.cookies.get(STATE_COOKIE, "")))
-    except ValueError:
-        cookie = {}
-    mode = cookie.get("m", "login")
+    cookie = _read_state_cookie(request)
+    mode = "link" if cookie.get("m") == "link" else "login"
     if error:
-        return _fail(f"GitHub sign-in was cancelled ({error})", mode)
-    if not code or not state or not secrets.compare_digest(state, str(cookie.get("s", ""))):
-        return _fail("GitHub sign-in expired or was tampered with; please try again", mode)
+        if error != "access_denied":
+            log.warning("GitHub OAuth returned error %r", error[:100])
+        return _fail("cancelled" if error == "access_denied" else "failed", mode)
+    expected = cookie.get("s")
+    if not code or not isinstance(expected, str) or not state.isascii() or not _same(state, expected):
+        return _fail("state", mode)
+
+    # The mode comes from the verified state: only a state minted for this session can link.
+    nonce, _, binding = state.partition(".")
+    link_user: User | None = None
+    if binding:
+        if ctx is None or ctx.session is None:
+            return _fail("session_expired")
+        if not _same(binding, _link_binding(ctx.session, nonce)):
+            return _fail("state", "link")
+        link_user = ctx.user
+    mode = "link" if link_user is not None else "login"
 
     try:
         token, scopes = await exchange_code(code)
         async with GitHubClient(token) as gh:
             profile = await gh.get_user()
-            gh_id, login = str(profile["id"]), profile["login"]
+            gh_id, login = str(profile["id"]), str(profile["login"])
             account = await db.scalar(
                 select(OAuthAccount)
                 .options(joinedload(OAuthAccount.user))
                 .where(OAuthAccount.provider == "github", OAuthAccount.provider_user_id == gh_id)
             )
 
-            if mode == "link":
-                if ctx is None:
-                    return _fail("Your Kiln session expired; sign in and try again", "login")
-                user = ctx.user
+            if link_user is not None:
+                user = link_user
                 if account is not None and account.user_id != user.id:
-                    return _fail(f"@{login} is already linked to another Kiln account", mode)
+                    return _fail("already_linked", mode, login)
                 if account is None and user.github is not None:
-                    return _fail("Unlink your current GitHub account first", mode)
+                    return _fail("unlink_first", mode)
                 if account is None:
-                    account = OAuthAccount(provider="github", provider_user_id=gh_id, login=login)
+                    account = OAuthAccount(provider="github", provider_user_id=gh_id, login=login[:100])
                     user.oauth_accounts.append(account)
                 audit.record(db, "auth.github_linked", actor=user, target=user, summary=f"Linked @{login}", request=request)
 
             elif account is not None:
                 user = account.user
                 if not user.is_active:
-                    return _fail("This account has been deactivated")
+                    return _fail("deactivated")
 
             else:
-                if not await _signup_allowed(db, gh, login):
-                    return _fail(f"@{login} is not allowed to sign in to Kiln; ask an admin to invite you")
+                if not await _signup_allowed(db, gh, profile):
+                    return _fail("not_allowed", login=login)
                 email, verified = await gh.get_primary_email()
-                if not email or not verified:
-                    return _fail("Your GitHub account needs a verified primary email address")
+                # An address too long for the column is refused, never cut into a different one.
+                if not email or not verified or len(email) > 320:
+                    return _fail("no_verified_email")
+                if await get_user_by_email(db, email):
+                    return _fail("email_in_use")
                 try:
                     user = await create_user(
-                        db, email=email, full_name=profile.get("name") or login, avatar_url=profile.get("avatar_url")
+                        db, email=email, full_name=(profile.get("name") or login)[:200], avatar_url=_avatar(profile)
                     )
-                except UserError:
-                    return _fail(
-                        f"A Kiln account already uses {email}. Sign in with your password, "
-                        "then link GitHub from Settings."
-                    )
-                account = OAuthAccount(provider="github", provider_user_id=gh_id, login=login)
+                except UserError as exc:
+                    log.error("GitHub sign-up for @%s failed: %s", login, exc)
+                    return _fail("config")
+                account = OAuthAccount(provider="github", provider_user_id=gh_id, login=login[:100])
                 user.oauth_accounts.append(account)
                 audit.record(db, "user.register", actor=user, target=user, summary=f"Signed up with GitHub @{login}", request=request)
     except GitHubError as exc:
         log.warning("GitHub OAuth failed: %s", exc)
-        return _fail("GitHub sign-in failed; please try again", mode)
+        return _fail("failed", mode)
 
-    account.login = login
+    account.login = login[:100]
     account.access_token = token
-    account.scopes = scopes
-    if profile.get("avatar_url"):
-        user.avatar_url = profile["avatar_url"]
+    account.scopes = scopes[:500]
+    if avatar := _avatar(profile):
+        user.avatar_url = avatar
 
     if mode == "link":
         await db.commit()

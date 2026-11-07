@@ -26,7 +26,7 @@
         <td class="muted">{% if u.github %}{{ icon("github", "i-sm") }} @{{ u.github.login }}{% endif %}{% if u.github and u.password_hash %} · {% endif %}{% if u.password_hash %}Password{% endif %}</td>
         <td>{% if u.is_active %}<span class="badge success">Active</span>{% else %}<span class="badge">Deactivated</span>{% endif %}</td>
         <td class="muted">{{ u.last_login_at|timeago }}</td>
-        <td class="actions-cell">{% if can_write %}<button class="btn btn-sm" data-open="edit-{{ u.id }}">Edit</button>{% endif %}</td>
+        <td class="actions-cell">{% if can_write and (u.id == user.id or u.id in manageable) %}<button class="btn btn-sm" data-open="edit-{{ u.id }}">Edit</button>{% endif %}</td>
       </tr>
     {% endfor %}</tbody>
   </table></div>
@@ -34,7 +34,7 @@
 
 {% if can_write %}
 <dialog class="modal" id="new-user" style="width: min(680px, calc(100vw - 32px))">
-  <form data-form="POST /api/v1/users" data-then="reload" data-success="User created">
+  <form method="post" action="/js-required" data-form="POST /api/v1/users" data-then="reload" data-success="User created">
     <div class="modal-head"><h2>Add user</h2><button class="icon-btn" type="button" data-close aria-label="Close">{{ icon("x") }}</button></div>
     <div class="modal-body">
       <div class="form-grid">
@@ -56,7 +56,7 @@
 
 {% for u in users %}
 <dialog class="modal" id="edit-{{ u.id }}" style="width: min(680px, calc(100vw - 32px))">
-  <form data-form="PATCH /api/v1/users/{{ u.id }}" data-then="reload" data-success="User updated">
+  <form method="post" action="/js-required" data-form="PATCH /api/v1/users/{{ u.id }}" data-then="reload" data-success="User updated">
     <div class="modal-head"><h2>Edit {{ u.display_name }}</h2><button class="icon-btn" type="button" data-close aria-label="Close">{{ icon("x") }}</button></div>
     <div class="modal-body">
       <div class="field"><label>Name</label><input class="input" name="full_name" value="{{ u.full_name }}" data-keep-empty></div>
@@ -65,7 +65,11 @@
       {% if u.id != user.id %}
       <label class="check"><input type="checkbox" name="is_active" {{ 'checked' if u.is_active }}><span><strong>Active</strong><br><span class="subtle">Deactivated users are signed out and cannot sign in.</span></span></label>
       {% endif %}
-      <div class="field"><label>Reset password <span class="subtle">(optional)</span></label><input class="input" name="password" type="password" autocomplete="new-password" minlength="10"></div>
+      {% if u.id != user.id %}
+      <div class="field"><label>Reset password <span class="subtle">(optional; also signs them out and deletes their API tokens)</span></label><input class="input" name="password" type="password" autocomplete="new-password" minlength="10"></div>
+      {% else %}
+      <p class="help">Change your own password under <a href="/settings">Profile</a>.</p>
+      {% endif %}
     </div>
     <div class="modal-foot">
       {% if u.id != user.id %}<button class="btn btn-danger" type="button" style="margin-right:auto" data-api="DELETE /api/v1/users/{{ u.id }}" data-confirm="Delete {{ u.email }} permanently?" data-then="reload">{{ icon("trash") }} Delete</button>{% endif %}

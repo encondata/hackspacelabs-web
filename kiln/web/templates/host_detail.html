@@ -34,8 +34,8 @@
   <div class="card-body stack" style="gap: 14px">
     <div><strong>1.</strong> On the host, as <code>{{ host.username }}</code>, add this line to <code>~/.ssh/authorized_keys</code>:</div>
     <div class="copy-row"><pre class="code" id="pubkey">{{ host.public_key }}</pre><button class="btn" data-copy-target="#pubkey">{{ icon("copy") }} Copy</button></div>
-    <div class="copy-row"><pre class="code" id="install-cmd">mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '{{ host.public_key }}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
-sudo mkdir -p {{ host.deploy_root }} && sudo chown {{ host.username }} {{ host.deploy_root }} && sudo usermod -aG docker {{ host.username }}</pre><button class="btn" data-copy-target="#install-cmd">{{ icon("copy") }} Copy</button></div>
+    <div class="copy-row"><pre class="code" id="install-cmd">mkdir -p ~/.ssh && chmod 700 ~/.ssh && printf '%s\n' {{ host.public_key|shquote }} >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+sudo mkdir -p {{ host.deploy_root|shquote }} && sudo chown {{ host.username|shquote }} {{ host.deploy_root|shquote }} && sudo usermod -aG docker {{ host.username|shquote }}</pre><button class="btn" data-copy-target="#install-cmd">{{ icon("copy") }} Copy</button></div>
     <div><strong>2.</strong> Click <em>Verify connection</em>. Kiln records the server's host key fingerprint and refuses to connect if it ever changes.</div>
   </div>
 </section>
@@ -75,21 +75,24 @@ sudo mkdir -p {{ host.deploy_root }} && sudo chown {{ host.username }} {{ host.d
   </section>
 </div>
 
+{% if auth.can(Perm.INSTANCES_READ) %}
+{% set can_repos = auth.can(Perm.REPOS_READ) %}
 <section class="card">
   <div class="card-head"><span class="head-icon">{{ icon("instances", "i-lg") }}</span><div><h2>Instances on this host</h2></div></div>
   {% if instances %}
   <div class="table-wrap"><table class="table">
-    <thead><tr><th>Instance</th><th>Repository</th><th>Branch</th><th>Status</th><th>Last deploy</th></tr></thead>
+    <thead><tr><th>Instance</th>{% if can_repos %}<th>Repository</th>{% endif %}<th>Branch</th><th>Status</th><th>Last deploy</th></tr></thead>
     <tbody>{% for i in instances %}
-      <tr><td><a href="/instances/{{ i.id }}"><strong>{{ i.name }}</strong></a></td><td class="muted">{{ i.repository.full_name }}</td><td><span class="chip">{{ icon("branch", "i-sm") }} {{ i.branch }}</span></td><td>{{ badge("instance", i.status) }}</td><td class="muted">{{ i.last_deployed_at|timeago }}</td></tr>
+      <tr><td><a href="/instances/{{ i.id }}"><strong>{{ i.name }}</strong></a></td>{% if can_repos %}<td class="muted">{{ i.repository.full_name }}</td>{% endif %}<td><span class="chip">{{ icon("branch", "i-sm") }} {{ i.branch }}</span></td><td>{{ badge("instance", i.status) }}</td><td class="muted">{{ i.last_deployed_at|timeago }}</td></tr>
     {% endfor %}</tbody>
   </table></div>
   {% else %}<div class="card-body"><p class="muted">Nothing runs here yet.</p></div>{% endif %}
 </section>
+{% endif %}
 
 {% if auth.can(Perm.HOSTS_WRITE) %}
 <dialog class="modal" id="edit-host" style="width: min(680px, calc(100vw - 32px))">
-  <form data-form="PATCH /api/v1/hosts/{{ host.id }}" data-then="reload" data-success="Host updated">
+  <form method="post" action="/js-required" data-form="PATCH /api/v1/hosts/{{ host.id }}" data-then="reload" data-success="Host updated">
     <div class="modal-head"><h2>Edit {{ host.name }}</h2><button class="icon-btn" type="button" data-close aria-label="Close">{{ icon("x") }}</button></div>
     <div class="modal-body">{% with h = host %}{% include "_host_fields.html" %}{% endwith %}
       <p class="subtle">Changing the hostname or port forgets the pinned host key.</p></div>

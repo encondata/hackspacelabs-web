@@ -16,15 +16,16 @@
 
 <section class="card">
   {% if deployments %}
+  {% set can_hosts, can_repos = auth.can(Perm.HOSTS_READ), auth.can(Perm.REPOS_READ) %}
   <div class="table-wrap"><table class="table">
-    <thead><tr><th>Instance</th><th>Status</th><th>Commit</th><th>Host</th><th>Triggered by</th><th>Started</th><th>Duration</th><th></th></tr></thead>
+    <thead><tr><th>Instance</th><th>Status</th><th>Commit</th>{% if can_hosts %}<th>Host</th>{% endif %}<th>Triggered by</th><th>Started</th><th>Duration</th><th></th></tr></thead>
     <tbody>
     {% for d in deployments %}
       <tr>
-        <td><a href="/instances/{{ d.instance.id }}"><strong>{{ d.instance.name }}</strong></a><div class="subtle">{{ d.instance.repository.full_name }}</div></td>
+        <td><a href="/instances/{{ d.instance.id }}"><strong>{{ d.instance.name }}</strong></a>{% if can_repos %}<div class="subtle">{{ d.instance.repository.full_name }}</div>{% endif %}</td>
         <td>{{ badge("deployment", d.status) }}</td>
         <td><span class="chip">{{ icon("branch", "i-sm") }} {{ d.branch }}</span> <span class="mono subtle">{{ d.short_sha }}</span><div class="subtle truncate" style="max-width: 300px">{{ d.commit_message or "" }}</div></td>
-        <td class="muted">{{ d.instance.host.name }}</td>
+        {% if can_hosts %}<td class="muted">{{ d.instance.host.name }}</td>{% endif %}
         <td class="muted">{{ d.triggered_by.display_name if d.triggered_by else "—" }}</td>
         <td class="muted nowrap" title="{{ d.created_at|dt }}">{{ d.created_at|timeago }}</td>
         <td class="muted">{{ d.duration_seconds|duration }}</td>

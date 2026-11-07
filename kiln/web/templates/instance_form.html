@@ -58,7 +58,7 @@
   <span class="step active"><b>4</b> Review &amp; Deploy</span>
 </div>
 
-<form class="grid grid-form" data-preview-form
+<form class="grid grid-form" data-preview-form method="post" action="/js-required"
       data-form="{{ ('PATCH /api/v1/instances/' ~ instance.id) if editing else 'POST /api/v1/instances' }}"
       data-then="redirect:/instances/{id}" data-success="{{ 'Instance updated' if editing else 'Instance created' }}">
   <div class="stack">
@@ -67,9 +67,12 @@
       <div class="card-body form-grid" style="grid-template-columns: minmax(0, 2fr) minmax(0, 1fr)">
         <div class="field">
           <label for="repo-select">Repository</label>
-          <select class="input" id="repo-select" name="repository_id" data-branches="#branch-select" {{ 'disabled' if editing }}>
+          {# On create, data-fill-* resets the build defaults and name when another repository is picked. #}
+          <select class="input" id="repo-select" name="repository_id" data-branches="#branch-select" {{ 'disabled' if editing else 'data-fill' }}>
             {% for r in repos %}
-            <option value="{{ r.id }}" data-default="{{ r.default_branch }}" {{ 'selected' if selected_repo and r.id == selected_repo.id }}>{{ r.full_name }}{{ "" if r.deployable else " (no Dockerfile detected)" }}</option>
+            <option value="{{ r.id }}" data-default="{{ r.default_branch }}"
+              {%- if not editing %} data-fill-name="{{ r.name }}-prod" data-fill-compose_file="{{ r.compose_file or 'docker-compose.yml' }}" data-fill-build_source="{{ 'compose' if r.compose_file and not r.has_dockerfile else 'dockerfile' }}"{% endif %}
+              {{ 'selected' if selected_repo and r.id == selected_repo.id }}>{{ r.full_name }}{% if r.archived %} (archived){% elif not r.deployable %} (no Dockerfile detected){% endif %}</option>
             {% endfor %}
           </select>
         </div>
@@ -85,18 +88,20 @@
       <div class="card-body stack" style="gap: 16px">
         {% set src = instance.build_source if editing else ("compose" if selected_repo and selected_repo.compose_file and not selected_repo.has_dockerfile else "dockerfile") %}
         <div class="choice-grid">
-          <label class="choice"><input type="radio" name="build_source" value="dockerfile" {{ 'checked' if src == 'dockerfile' }}>{{ icon("file") }}<span><strong>Dockerfile</strong><small>Build a single container from a Dockerfile</small></span></label>
-          <label class="choice"><input type="radio" name="build_source" value="compose" {{ 'checked' if src == 'compose' }}>{{ icon("package") }}<span><strong>docker compose</strong><small>Use a compose file to build multiple services</small></span></label>
+          <label class="choice"><input type="radio" name="build_source" value="dockerfile" {{ 'checked' if src == 'dockerfile' }} {{ 'disabled' if locked }}>{{ icon("file") }}<span><strong>Dockerfile</strong><small>Build a single container from a Dockerfile</small></span></label>
+          <label class="choice"><input type="radio" name="build_source" value="compose" {{ 'checked' if src == 'compose' }} {{ 'disabled' if locked }}>{{ icon("package") }}<span><strong>docker compose</strong><small>Use a compose file to build multiple services</small></span></label>
         </div>
         <div class="form-grid" data-show-when="build_source=dockerfile">
-          <div class="field"><label for="df">Dockerfile path</label><input class="input mono" id="df" name="dockerfile_path" value="{{ instance.dockerfile_path if editing else 'Dockerfile' }}"></div>
-          <div class="field"><label for="ctx">Build context</label><input class="input mono" id="ctx" name="build_context" value="{{ instance.build_context if editing else '.' }}"></div>
+          <div class="field"><label for="df">Dockerfile path</label><input class="input mono" id="df" name="dockerfile_path" {{ 'disabled' if locked }} value="{{ instance.dockerfile_path if editing else 'Dockerfile' }}"></div>
+          <div class="field"><label for="ctx">Build context</label><input class="input mono" id="ctx" name="build_context" {{ 'disabled' if locked }} value="{{ instance.build_context if editing else '.' }}"></div>
         </div>
         <div class="field" data-show-when="build_source=compose">
           <label for="cf">Compose file</label>
-          <input class="input mono" id="cf" name="compose_file" value="{{ instance.compose_file if editing else (selected_repo.compose_file if selected_repo and selected_repo.compose_file else 'docker-compose.yml') }}">
-          <span class="help">Ports and volumes come from the compose file; the variables below are written to <code>.env</code> for interpolation.</span>
+          <input class="input mono" id="cf" name="compose_file" {{ 'disabled' if locked }} value="{{ instance.compose_file if editing else (selected_repo.compose_file if selected_repo and selected_repo.compose_file else 'docker-compose.yml') }}">
+          <span class="help">Ports and volumes come from the compose file. The variables below override the repository's <code>.env</code> (next to the compose file) and are passed literally.</span>
         </div>
+        <div class="callout warning" data-show-when="build_source=compose">{{ icon("alert") }}<span>Compose files run as trusted code with host-level access: anyone who can push to this branch and deploy it can take control of the host.</span></div>
+        {% if locked %}<p class="help">Host and build settings are fixed after the first deployment. To change them, destroy this instance and create a new one.</p>{% endif %}
       </div>
     </section>
 
@@ -105,7 +110,7 @@
       <div class="card-body stack" style="gap: 10px">
         {% for h in hosts %}
         <label class="choice">
-          <input type="radio" name="host_id" value="{{ h.id }}" data-label="{{ h.name }} ({{ h.address }})" {{ 'checked' if (editing and instance.host_id == h.id) or (not editing and loop.first) }}>
+          <input type="radio" name="host_id" value="{{ h.id }}" {{ 'disabled' if locked }} data-label="{{ h.name }} ({{ h.address }})" {{ 'checked' if (editing and instance.host_id == h.id) or (not editing and loop.first) }}>
           <span><strong>{{ h.name }}</strong><small class="mono">{{ h.address }}</small></span>
           <span class="choice-meta">
             {{ badge("host", h.status) }}

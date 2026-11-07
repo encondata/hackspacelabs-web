@@ -16,7 +16,8 @@
     <div class="divider">or sign in with email</div>
     {% endif %}
 
-    <form id="login-form" data-form="POST /api/v1/auth/login" data-then="redirect:{{ next if next.startswith('/') and not next.startswith('//') else '/' }}" class="stack" style="gap: 14px">
+    {# `next` was sanitized by safe_next() in pages.py. #}
+    <form id="login-form" method="post" action="/js-required" data-form="POST /api/v1/auth/login" data-then="redirect:{{ next }}" class="stack" style="gap: 14px">
       <div class="field">
         <label for="email">Email</label>
         <input class="input" id="email" name="email" type="email" autocomplete="username" required autofocus>
@@ -32,7 +33,9 @@
     <div class="callout primary">{{ icon("info") }}
       <span>No accounts exist yet. Create the first admin with
         <code>kiln create-admin you@example.com</code>, set <code>KILN_ADMIN_EMAIL</code> / <code>KILN_ADMIN_PASSWORD</code>,
-        {% if settings.github_enabled %}or simply continue with GitHub (the first account becomes admin).{% else %}then restart.{% endif %}
+        {% if not settings.github_enabled %}then restart.
+        {% elif settings.github_allowed_users or settings.github_allowed_orgs %}or continue with an allow-listed GitHub account (the first one becomes admin).
+        {% else %}or simply continue with GitHub (the first account becomes admin).{% endif %}
       </span>
     </div>
     {% elif settings.allow_signup %}

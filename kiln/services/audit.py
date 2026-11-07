@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
 
 from fastapi import Request
@@ -11,9 +12,14 @@ from kiln.models import AuditEvent, User
 
 
 def client_ip(request: Request | None) -> str | None:
-    if request is None or request.client is None:
+    """The client's address, normalised, or None when it is missing or not an IP address."""
+    if request is None or request.client is None or not request.client.host:
         return None
-    return request.client.host
+    try:
+        # The zone id ("%eth0") is dropped: it is free-form text and says nothing about the client.
+        return str(ipaddress.ip_address(request.client.host.split("%", 1)[0]))
+    except ValueError:
+        return None
 
 
 def record(

@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
 from kiln.api.deps import DB, not_found, require
+from kiln.core.config import get_settings
 from kiln.core.permissions import PERMISSION_DESCRIPTIONS, Perm, has_permission
 from kiln.models import Role
 from kiln.schemas import PermissionOut, RoleIn, RoleOut, RoleUpdate
@@ -64,7 +65,8 @@ async def _custom_role(db: DB, role_id: uuid.UUID) -> Role:
 async def update_role(role_id: uuid.UUID, body: RoleUpdate, ctx: Writer, request: Request, db: DB) -> RoleOut:
     role = await _custom_role(db, role_id)
     if body.permissions is not None:
-        _check_grantable(ctx, body.permissions)
+        # Only newly added permissions need to be grantable; untouched ones (e.g. a wildcard) may stay.
+        _check_grantable(ctx, [p for p in body.permissions if p not in role.permissions])
         role.permissions = body.permissions
     if body.description is not None:
         role.description = body.description
@@ -76,6 +78,11 @@ async def update_role(role_id: uuid.UUID, body: RoleUpdate, ctx: Writer, request
 @router.delete("/{role_id}", status_code=204)
 async def delete_role(role_id: uuid.UUID, ctx: Writer, request: Request, db: DB) -> None:
     role = await _custom_role(db, role_id)
+    if role.name == get_settings().default_role:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"'{role.name}' is the role new accounts get (KILN_DEFAULT_ROLE); change that setting first",
+        )
     audit.record(db, "role.delete", actor=ctx.user, target=role, summary=f"Deleted role {role.name}", request=request)
     await db.delete(role)
     await db.commit()

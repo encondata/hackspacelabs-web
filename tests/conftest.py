@@ -23,7 +23,7 @@ os.environ.update(
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 
-from kiln.core.ratelimit import login_limiter  # noqa: E402
+from kiln.core import ratelimit  # noqa: E402
 from kiln.db.base import Base  # noqa: E402
 from kiln.db.session import get_engine, get_sessionmaker, init_engine  # noqa: E402
 from kiln.main import create_app  # noqa: E402
@@ -47,16 +47,17 @@ async def fresh_db(app) -> AsyncIterator[None]:
         await conn.run_sync(Base.metadata.create_all)
     async with get_sessionmaker()() as db:
         await bootstrap(db)
-    login_limiter._hits.clear()
+    ratelimit.reset_all()
     yield
 
 
 @pytest.fixture
-def make_client(app) -> Callable[[], httpx.AsyncClient]:
+def make_client(app) -> Callable[..., httpx.AsyncClient]:
     clients: list[httpx.AsyncClient] = []
 
-    def factory() -> httpx.AsyncClient:
-        c = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
+    def factory(ip: str = "127.0.0.1") -> httpx.AsyncClient:
+        transport = httpx.ASGITransport(app=app, client=(ip, 123))
+        c = httpx.AsyncClient(transport=transport, base_url="http://testserver")
         clients.append(c)
         return c
 

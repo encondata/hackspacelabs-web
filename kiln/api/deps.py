@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import secrets
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from kiln.core.security import safe_equals
 from kiln.db.session import get_db
 from kiln.services.auth import (
     CSRF_HEADER,
@@ -46,7 +46,7 @@ async def get_auth(request: Request, ctx: OptionalAuth) -> AuthContext:
     # Cookie-authenticated writes must echo the per-session CSRF token in a header.
     if ctx.via == "session" and request.method not in SAFE_METHODS:
         sent = request.headers.get(CSRF_HEADER, "")
-        if not (ctx.session and secrets.compare_digest(sent, ctx.session.csrf_token)):
+        if not (ctx.session and safe_equals(sent, ctx.session.csrf_token)):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "CSRF token missing or invalid")
     return ctx
 

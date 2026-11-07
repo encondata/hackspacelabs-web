@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import shlex
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
@@ -12,11 +14,12 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select
+from sqlalchemy.orm import defer
 
 from kiln import __version__
 from kiln.api.deps import DB, OptionalAuth
 from kiln.core.config import get_settings
-from kiln.core.permissions import PERMISSION_DESCRIPTIONS, Perm
+from kiln.core.permissions import PERMISSION_DESCRIPTIONS, Perm, has_permission
 from kiln.db.base import utcnow
 from kiln.models import (
     ApiToken,
@@ -37,6 +40,8 @@ from kiln.web.oauth import safe_next
 
 router = APIRouter(include_in_schema=False)
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+# List pages never show build logs; don't load up to 1 MB per row (raise if a template ever reads it).
+NO_LOG = defer(Deployment.log, raiseload=True)
 
 
 # ----------------------------------------------------------------------- filters
@@ -66,8 +71,46 @@ def fmt_duration(seconds: float | None) -> str:
     return f"{m}m {s:02d}s" if m else f"{s}s"
 
 
-templates.env.filters.update(timeago=timeago, dt=fmt_dt, duration=fmt_duration)
+templates.env.filters.update(timeago=timeago, dt=fmt_dt, duration=fmt_duration, shquote=shlex.quote)
 templates.env.globals.update(Perm=Perm, version=__version__)
+
+
+# ------------------------------------------------------------- OAuth errors
+
+GITHUB_LOGIN = re.compile(r"[A-Za-z0-9-]{1,39}")
+SIGN_IN_FAILED = "Sign-in failed. Please try again."
+# The ?error=<code> values kiln.web.oauth redirects with. Only these fixed texts are shown.
+OAUTH_ERRORS: dict[str, str] = {
+    "cancelled": "GitHub sign-in was cancelled.",
+    "state": "GitHub sign-in expired or was tampered with. Please try again.",
+    "session_expired": "Your Kiln session expired. Sign in and try again.",
+    "already_linked": "{who} is already linked to another Kiln account.",
+    "unlink_first": "Unlink your current GitHub account first.",
+    "deactivated": "This account has been deactivated.",
+    "not_allowed": "{who} is not allowed to sign in to Kiln. Ask an admin to invite you.",
+    "no_verified_email": "Your GitHub account needs a verified primary email address.",
+    "email_in_use": "A Kiln account already uses your GitHub email. Sign in with your password, then link GitHub from Settings.",
+    "config": "GitHub sign-in is misconfigured on this Kiln. Ask an admin.",
+    "failed": "GitHub sign-in failed. Please try again.",
+}
+
+
+def oauth_error(code: str, login: str = "") -> str:
+    """Message for an OAuth ``?error=`` code. Query text is never echoed, apart from a valid GitHub login."""
+    if not code:
+        return ""
+    who = f"@{login}" if GITHUB_LOGIN.fullmatch(login) else "This GitHub account"
+    return OAUTH_ERRORS.get(code, SIGN_IN_FAILED).format(who=who)
+
+
+def permission_choices() -> dict[str, str]:
+    """Everything a role can hold: ``*``, then each resource's wildcard followed by its actions."""
+    choices = {"*": "All permissions, including ones added later"}
+    for name, desc in PERMISSION_DESCRIPTIONS.items():
+        resource = str(name).split(":", 1)[0]
+        choices.setdefault(f"{resource}:*", f"Every {resource} permission")
+        choices[str(name)] = desc
+    return choices
 
 
 # --------------------------------------------------------------- auth plumbing
@@ -148,41 +191,68 @@ def instance_summary(instances: list[Instance]) -> dict[str, Any]:
     }
 
 
+def no_summaries() -> dict[uuid.UUID, dict[str, Any]]:
+    return defaultdict(lambda: instance_summary([]))
+
+
 async def repo_summaries(db: DB) -> dict[uuid.UUID, dict[str, Any]]:
     grouped: dict[uuid.UUID, list[Instance]] = defaultdict(list)
     for inst in (await db.scalars(select(Instance))).all():
         grouped[inst.repository_id].append(inst)
-    return defaultdict(lambda: instance_summary([]), {k: instance_summary(v) for k, v in grouped.items()})
+    summaries = no_summaries()
+    summaries.update({k: instance_summary(v) for k, v in grouped.items()})
+    return summaries
 
 
 # ------------------------------------------------------------------------- pages
 
 
 @router.get("/login")
-async def login_page(request: Request, db: DB, ctx: OptionalAuth, next: str = "/", error: str = "") -> Response:
+async def login_page(
+    request: Request, db: DB, ctx: OptionalAuth, next: str = "/", error: str = "", login: str = ""
+) -> Response:
     next = safe_next(next)
     if ctx is not None:
         return RedirectResponse(next, 302)
-    return await render(request, db, "login.html", None, next=next, error=error, no_users=await user_count(db) == 0)
+    return await render(
+        request, db, "login.html", None, next=next, error=oauth_error(error, login), no_users=await user_count(db) == 0
+    )
+
+
+@router.post("/js-required")
+async def js_required(request: Request, db: DB, ctx: OptionalAuth) -> HTMLResponse:
+    """Native target of API-backed forms submitted before kiln.js has loaded. The body is never read."""
+    return await render(
+        request, db, "error.html", ctx, status_code=400, code=400, heading="JavaScript required",
+        message="This form needs JavaScript. Reload the page and try again.",
+    )
 
 
 @router.get("/")
 async def overview(request: Request, db: DB, ctx: PageAuth) -> HTMLResponse:
+    # Each section only loads what the viewer may read; overview.html hides the rest.
+    can_repos, can_hosts = ctx.can(Perm.REPOS_READ), ctx.can(Perm.HOSTS_READ)
+    can_instances, can_deps = ctx.can(Perm.INSTANCES_READ), ctx.can(Perm.DEPLOYMENTS_READ)
     today = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    repos = (await db.scalars(select(Repository).order_by(Repository.pushed_at.desc().nulls_last()))).all()
-    hosts = (await db.scalars(select(Host).order_by(Host.name))).all()
-    instances = (await db.scalars(select(Instance))).all()
-    recent = (await db.scalars(select(Deployment).order_by(Deployment.created_at.desc()).limit(6))).all()
-    today_deps = (await db.scalars(select(Deployment).where(Deployment.created_at >= today))).all()
-    summaries = await repo_summaries(db)
+    repos = (
+        (await db.scalars(select(Repository).order_by(Repository.pushed_at.desc().nulls_last()))).all() if can_repos else []
+    )
+    hosts = (await db.scalars(select(Host).order_by(Host.name))).all() if can_hosts else []
+    instances = (await db.scalars(select(Instance))).all() if can_instances else []
+    recent = (
+        (await db.scalars(select(Deployment).options(NO_LOG).order_by(Deployment.created_at.desc()).limit(6))).all() if can_deps else []
+    )
+    today_deps = (await db.scalars(select(Deployment).options(NO_LOG).where(Deployment.created_at >= today))).all() if can_deps else []
+    summaries = await repo_summaries(db) if can_instances else no_summaries()
 
-    steps = [
-        ("Link your GitHub account", bool(ctx.user.github), "/settings"),
-        ("Sync repositories", bool(repos), "/repositories"),
-        ("Add a Docker host", bool(hosts), "/hosts"),
-        ("Verify the host's SSH key", any(h.is_pinned for h in hosts), "/hosts"),
-        ("Create your first instance", bool(instances), "/instances/new"),
-    ]
+    steps = [("Link your GitHub account", bool(ctx.user.github), "/settings")]
+    if can_repos:
+        steps.append(("Sync repositories", bool(repos), "/repositories"))
+    if can_hosts:
+        steps.append(("Add a Docker host", bool(hosts), "/hosts"))
+        steps.append(("Verify the host's SSH key", any(h.is_pinned for h in hosts), "/hosts"))
+    if can_instances:
+        steps.append(("Create your first instance", bool(instances), "/instances/new"))
     stats = {
         "repos": len(repos),
         "deployable": sum(1 for r in repos if r.deployable),
@@ -227,8 +297,11 @@ async def search(request: Request, db: DB, ctx: PageAuth, q: str = "") -> HTMLRe
 async def repositories(request: Request, db: DB, ctx: PageAuth, q: str = "", show: str = "all", repo: str = "") -> HTMLResponse:
     repo_id = _uuid(repo)
     need(ctx, Perm.REPOS_READ)
+    can_instances = ctx.can(Perm.INSTANCES_READ)
+    if not can_instances and show in ("deployed", "unconfigured"):
+        show = "all"
     all_repos = (await db.scalars(select(Repository).order_by(Repository.pushed_at.desc().nulls_last()))).all()
-    summaries = await repo_summaries(db)
+    summaries = await repo_summaries(db) if can_instances else no_summaries()
     rows = list(all_repos)
     if q:
         rows = [r for r in rows if q.lower() in r.full_name.lower() or q.lower() in (r.description or "").lower()]
@@ -240,7 +313,8 @@ async def repositories(request: Request, db: DB, ctx: PageAuth, q: str = "", sho
         rows = [r for r in rows if not summaries[r.id]["count"]]
     selected = next((r for r in all_repos if r.id == repo_id), None) if repo_id else None
     selected_instances = (
-        (await db.scalars(select(Instance).where(Instance.repository_id == selected.id))).all() if selected else []
+        (await db.scalars(select(Instance).where(Instance.repository_id == selected.id))).all()
+        if selected and can_instances else []
     )
     stats = {
         "total": len(all_repos),
@@ -258,7 +332,10 @@ async def repositories(request: Request, db: DB, ctx: PageAuth, q: str = "", sho
 async def hosts_page(request: Request, db: DB, ctx: PageAuth) -> HTMLResponse:
     need(ctx, Perm.HOSTS_READ)
     hosts = (await db.scalars(select(Host).order_by(Host.name))).all()
-    counts = dict((await db.execute(select(Instance.host_id, func.count()).group_by(Instance.host_id))).all())
+    counts = (
+        dict((await db.execute(select(Instance.host_id, func.count()).group_by(Instance.host_id))).all())
+        if ctx.can(Perm.INSTANCES_READ) else {}
+    )
     return await render(request, db, "hosts.html", ctx, hosts=hosts, counts=counts)
 
 
@@ -268,7 +345,10 @@ async def host_detail(request: Request, db: DB, ctx: PageAuth, host_id: uuid.UUI
     host = await db.get(Host, host_id)
     if host is None:
         return await not_found_page(request, db, ctx)
-    instances = (await db.scalars(select(Instance).where(Instance.host_id == host.id).order_by(Instance.name))).all()
+    instances = (
+        (await db.scalars(select(Instance).where(Instance.host_id == host.id).order_by(Instance.name))).all()
+        if ctx.can(Perm.INSTANCES_READ) else []
+    )
     return await render(request, db, "host_detail.html", ctx, host=host, instances=instances)
 
 
@@ -301,7 +381,7 @@ async def instance_detail(request: Request, db: DB, ctx: PageAuth, instance_id: 
     if instance is None:
         return await not_found_page(request, db, ctx)
     deployments = (await db.scalars(
-        select(Deployment).where(Deployment.instance_id == instance.id).order_by(Deployment.created_at.desc()).limit(10)
+        select(Deployment).options(NO_LOG).where(Deployment.instance_id == instance.id).order_by(Deployment.created_at.desc()).limit(10)
     )).all() if ctx.can(Perm.DEPLOYMENTS_READ) else []
     return await render(request, db, "instance_detail.html", ctx, instance=instance, deployments=deployments)
 
@@ -312,16 +392,24 @@ async def edit_instance(request: Request, db: DB, ctx: PageAuth, instance_id: uu
     instance = await db.get(Instance, instance_id)
     if instance is None:
         return await not_found_page(request, db, ctx)
+    context = await _form_context(db)
+    # The repository is fixed once an instance exists, and may since have been archived.
+    context["repos"] = [instance.repository]
+    # Same rule as PATCH /api/v1/instances/{id}: placement and build settings freeze once anything ran on the host.
+    started = await db.scalar(
+        select(Deployment.id).where(Deployment.instance_id == instance.id, Deployment.started_at.is_not(None)).limit(1)
+    )
+    locked = instance.status != InstanceStatus.CREATED or started is not None
     return await render(
         request, db, "instance_form.html", ctx, instance=instance, env=instance.env or {},
-        selected_repo=instance.repository, **await _form_context(db),
+        selected_repo=instance.repository, locked=locked, **context,
     )
 
 
 @router.get("/deployments")
 async def deployments_page(request: Request, db: DB, ctx: PageAuth, status: str = "") -> HTMLResponse:
     need(ctx, Perm.DEPLOYMENTS_READ)
-    stmt = select(Deployment).order_by(Deployment.created_at.desc()).limit(100)
+    stmt = select(Deployment).options(NO_LOG).order_by(Deployment.created_at.desc()).limit(100)
     if status:
         stmt = stmt.where(Deployment.status == status)
     deployments = (await db.scalars(stmt)).all()
@@ -353,8 +441,12 @@ async def logs(request: Request, db: DB, ctx: PageAuth) -> HTMLResponse:
 
 
 @router.get("/settings")
-async def settings_profile(request: Request, db: DB, ctx: PageAuth, error: str = "", linked: str = "") -> HTMLResponse:
-    return await render(request, db, "settings/profile.html", ctx, tab="profile", error=error, linked=bool(linked))
+async def settings_profile(
+    request: Request, db: DB, ctx: PageAuth, error: str = "", login: str = "", linked: str = ""
+) -> HTMLResponse:
+    return await render(
+        request, db, "settings/profile.html", ctx, tab="profile", error=oauth_error(error, login), linked=bool(linked)
+    )
 
 
 @router.get("/settings/tokens")
@@ -370,7 +462,12 @@ async def settings_users(request: Request, db: DB, ctx: PageAuth) -> HTMLRespons
     need(ctx, Perm.USERS_READ)
     users = (await db.scalars(select(User).order_by(User.created_at))).all()
     roles = (await db.scalars(select(Role).order_by(Role.is_system.desc(), Role.name))).all()
-    return await render(request, db, "settings/users.html", ctx, tab="users", users=users, roles=roles)
+    # users:write only reaches users whose every permission the viewer also holds (the API enforces this).
+    mine = ctx.user.permissions
+    manageable = {u.id for u in users if all(has_permission(mine, p) for p in u.permissions)}
+    return await render(
+        request, db, "settings/users.html", ctx, tab="users", users=users, roles=roles, manageable=manageable
+    )
 
 
 @router.get("/settings/roles")
@@ -378,7 +475,8 @@ async def settings_roles(request: Request, db: DB, ctx: PageAuth) -> HTMLRespons
     need(ctx, Perm.ROLES_READ)
     roles = (await db.scalars(select(Role).order_by(Role.is_system.desc(), Role.name))).all()
     return await render(
-        request, db, "settings/roles.html", ctx, tab="roles", roles=roles, catalog=PERMISSION_DESCRIPTIONS
+        request, db, "settings/roles.html", ctx, tab="roles", roles=roles, catalog=PERMISSION_DESCRIPTIONS,
+        choices=permission_choices(),
     )
 
 

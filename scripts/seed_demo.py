@@ -5,6 +5,8 @@ For UI work without GitHub or real Docker hosts. Refuses to run in production.
     KILN_DATABASE_URL=sqlite+aiosqlite:///data/kiln-demo.db .venv/bin/python scripts/seed_demo.py
 
 Hosts get random (fake) pinned keys, so "Check" against them will fail; that's expected.
+Create your own admin first (KILN_ADMIN_EMAIL/KILN_ADMIN_PASSWORD or `kiln create-admin`): the demo
+team members have no password and cannot sign in.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from kiln.db.base import utcnow  # noqa: E402
 from kiln.db.session import dispose_engine, get_sessionmaker  # noqa: E402
 from kiln.models import Deployment, Host, Instance, Repository  # noqa: E402
 from kiln.services import ssh  # noqa: E402
-from kiln.services.users import bootstrap, create_user, get_user_by_email  # noqa: E402
+from kiln.services.users import bootstrap, create_user, get_user_by_email, user_count  # noqa: E402
 
 REPOS = [
     ("kiln-web", "Kiln web app (dashboard, API, and console)", "TypeScript", "public", True, "docker-compose.yml"),
@@ -77,11 +79,15 @@ async def main() -> None:
         if await db.scalar(select(func.count()).select_from(Repository)):
             print("Database already has repositories; nothing to do.")
             return
+        if await user_count(db) == 0:
+            # Otherwise the first demo user would silently become the only (password-less) admin.
+            sys.exit("Create an admin first (set KILN_ADMIN_EMAIL/KILN_ADMIN_PASSWORD or run `kiln create-admin`)")
         team = []
         for email, name, role in [("maria@example.com", "Maria Lopez", "developer"), ("james@example.com", "James Park", "maintainer"),
                                   ("sarah@example.com", "Sarah Chen", "viewer")]:
+            # No password: demo users only fill in "created by" / "triggered by" and never sign in.
             user = await get_user_by_email(db, email) or await create_user(
-                db, email=email, password=ssh.generate_keypair()[0][:40], full_name=name, role_names=[role])
+                db, email=email, password=None, full_name=name, role_names=[role])
             team.append(user)
 
         now = utcnow()

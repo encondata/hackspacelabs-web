@@ -40,10 +40,16 @@ PERMISSION_DESCRIPTIONS: dict[str, str] = {
     Perm.REPOS_READ: "View GitHub repositories known to Kiln",
     Perm.REPOS_SYNC: "Sync repositories from GitHub",
     Perm.INSTANCES_READ: "View instances, container status and logs",
-    Perm.INSTANCES_WRITE: "Create, configure and destroy instances (privileged: controls host mounts)",
+    Perm.INSTANCES_WRITE: (
+        "Create, configure and destroy instances (privileged: controls host mounts; "
+        "a compose instance runs whatever its branch's compose file defines, as root on the host)"
+    ),
     Perm.INSTANCES_OPERATE: "Start, stop and restart instances",
     Perm.DEPLOYMENTS_READ: "View deployments and build output",
-    Perm.DEPLOYMENTS_CREATE: "Trigger deployments",
+    Perm.DEPLOYMENTS_CREATE: (
+        "Trigger deployments (for compose instances, together with push access to the branch "
+        "this means root on the host, including other instances' secrets there)"
+    ),
     Perm.ANALYTICS_READ: "View mobile and web analytics",
     Perm.LOGS_READ: "View platform and application logs",
     Perm.AUDIT_READ: "View the audit log",

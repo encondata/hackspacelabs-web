@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 
+from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kiln.core.config import get_settings
 from kiln.db.base import utcnow
 from kiln.db.session import session_scope
-from kiln.models import Host, HostStatus
-from kiln.services import ssh
+from kiln.models import Host, HostStatus, User
+from kiln.services import audit, ssh
 
 log = logging.getLogger(__name__)
 
@@ -28,28 +30,67 @@ def status_from_probe(result: ssh.ProbeResult) -> HostStatus:
     return HostStatus.HEALTHY
 
 
-async def check_host(db: AsyncSession, host: Host) -> Host:
-    """Probe a host over SSH and store the result. Pins the host key on first contact."""
+async def check_host(
+    db: AsyncSession, host: Host, *, actor: User | None = None, request: Request | None = None
+) -> Host | None:
+    """Probe a host over SSH and store the result. Pins the host key on first contact.
+
+    No database connection is held while SSH runs. Returns None if the host was deleted meanwhile;
+    a result is discarded if the host's address or pinned key changed during the probe.
+    """
     host.last_checked_at = utcnow()
-    try:
-        result = await ssh.probe(ssh.SSHTarget.from_host(host))
-    except ssh.HostKeyMismatch as exc:
-        host.status = HostStatus.ERROR
-        host.last_error = str(exc)
-    except ssh.SSHError as exc:
-        host.status = HostStatus.UNREACHABLE
-        host.last_error = str(exc)
-    else:
-        if not host.host_key:
-            host.host_key = result.host_key
-            host.host_key_fingerprint = result.fingerprint
-        host.status = status_from_probe(result)
-        host.last_error = result.docker_error
-        host.docker_version = result.docker_version
-        host.os_info = result.os_info
-        host.metrics = result.metrics
+    target = ssh.SSHTarget.from_host(host)
     await db.commit()
-    return host
+    result: ssh.ProbeResult | None = None
+    try:
+        result = await ssh.probe(target)
+    except ssh.HostKeyMismatch as exc:
+        status, error = HostStatus.ERROR, str(exc)
+    except ssh.SSHError as exc:
+        status, error = HostStatus.UNREACHABLE, str(exc)
+    else:
+        status, error = status_from_probe(result), result.docker_error
+
+    current = await db.get(Host, host.id, populate_existing=True)
+    if current is None:
+        return None
+    if (current.hostname, current.port, current.host_key) != (target.hostname, target.port, target.pinned_host_key):
+        return current
+    current.status = status
+    current.last_error = ssh.clip(error, 2000) if error else None
+    if result is not None:
+        if not current.host_key:
+            current.host_key = result.host_key
+            current.host_key_fingerprint = result.fingerprint
+            audit.record(
+                db, "host.key_pinned", actor=actor, target=current,
+                summary=f"Pinned host key {result.fingerprint} for {current.name}", request=request,
+            )
+        current.docker_version = ssh.clip(result.docker_version, 64) if result.docker_version else None
+        current.os_info = ssh.clip(result.os_info, 255)
+        current.metrics = result.metrics
+    await db.commit()
+    return current
+
+
+async def _check_by_id(host_id: uuid.UUID) -> None:
+    async with session_scope() as db:
+        host = await db.get(Host, host_id)
+        if host is not None and host.is_pinned:
+            await check_host(db, host)
+
+
+async def poll_once() -> None:
+    """Check every pinned host. Each host gets its own session, so one failure cannot affect the others."""
+    async with session_scope() as db:
+        ids = (await db.scalars(select(Host.id).where(Host.host_key.is_not(None)).order_by(Host.name))).all()
+    for host_id in ids:
+        try:
+            await _check_by_id(host_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Health check failed for host %s", host_id)
 
 
 async def poll_hosts_forever() -> None:
@@ -59,10 +100,7 @@ async def poll_hosts_forever() -> None:
     while True:
         await asyncio.sleep(interval)
         try:
-            async with session_scope() as db:
-                hosts = (await db.scalars(select(Host).where(Host.host_key.is_not(None)))).all()
-                for host in hosts:
-                    await check_host(db, host)
+            await poll_once()
         except asyncio.CancelledError:
             raise
         except Exception:  # keep polling whatever happens

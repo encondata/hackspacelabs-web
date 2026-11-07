@@ -2,6 +2,10 @@
 {% from "_macros.html" import icon, badge, meter, stat, empty, repo_icon %}
 {% block title %}Overview{% endblock %}
 {% block content %}
+{% set can_repos = auth.can(Perm.REPOS_READ) %}
+{% set can_hosts = auth.can(Perm.HOSTS_READ) %}
+{% set can_instances = auth.can(Perm.INSTANCES_READ) %}
+{% set can_deps = auth.can(Perm.DEPLOYMENTS_READ) %}
 <div class="page-head">
   <div>
     <h1>{{ greeting }}, {{ user.display_name.split(" ")[0] }} 👋</h1>
@@ -16,19 +20,31 @@
   </div>
 </div>
 
+{% if can_repos or can_instances or can_hosts or can_deps %}
 <div class="grid grid-4">
+  {% if can_repos %}
   {% call stat("repositories", "GitHub Repos", stats.repos, "/repositories") %}<span>{{ stats.deployable }} Docker-ready</span>{% endcall %}
+  {% endif %}
+  {% if can_instances %}
   {% call stat("instances", "Active Instances", stats.running, "/instances") %}<span>of {{ stats.instances }} configured</span>{% endcall %}
+  {% endif %}
+  {% if can_hosts %}
   {% call stat("hosts", "Docker Hosts", stats.hosts, "/hosts") %}
     <span class="row" style="gap:6px"><span class="dot success"></span>{{ stats.healthy }} healthy</span>
     {% if stats.warning %}<span class="row" style="gap:6px"><span class="dot warning"></span>{{ stats.warning }} need attention</span>{% endif %}
   {% endcall %}
+  {% endif %}
+  {% if can_deps %}
   {% call stat("rocket", "Deployments Today", stats.today, "/deployments") %}
     {% if stats.today_failed %}<span class="bad">{{ stats.today_failed }} failed</span>{% else %}<span>{{ "All succeeded" if stats.today else "None yet today" }}</span>{% endif %}
   {% endcall %}
+  {% endif %}
 </div>
+{% endif %}
 
+{% if can_repos or can_hosts %}
 <div class="grid grid-main">
+  {% if can_repos %}
   <section class="card">
     <div class="card-head">
       <span class="head-icon">{{ icon("repositories", "i-lg") }}</span>
@@ -38,14 +54,14 @@
     </div>
     {% if repos %}
     <div class="table-wrap"><table class="table">
-      <thead><tr><th>Repository</th><th>Branch</th><th>Last Push</th><th>Deployment</th></tr></thead>
+      <thead><tr><th>Repository</th><th>Branch</th><th>Last Push</th>{% if can_instances %}<th>Deployment</th>{% endif %}</tr></thead>
       <tbody>
       {% for r in repos %}{% set s = summaries[r.id] %}
         <tr>
           <td><a class="primary-cell" href="/repositories?repo={{ r.id }}" style="color:inherit">{{ repo_icon(r) }}<span class="truncate"><strong>{{ r.name }}</strong><small>{{ r.full_name }}</small></span></a></td>
           <td><span class="chip">{{ icon("branch", "i-sm") }} {{ r.default_branch }}</span></td>
           <td class="muted nowrap">{{ r.pushed_at|timeago }}</td>
-          <td>{{ badge("repo", s.state) }}{% if s.sha %}<div class="subtle mono">{{ s.sha }}</div>{% endif %}</td>
+          {% if can_instances %}<td>{{ badge("repo", s.state) }}{% if s.sha %}<div class="subtle mono">{{ s.sha }}</div>{% endif %}</td>{% endif %}
         </tr>
       {% endfor %}
       </tbody>
@@ -62,7 +78,9 @@
       {% endif %}
     {% endif %}
   </section>
+  {% endif %}
 
+  {% if can_hosts %}
   <section class="card">
     <div class="card-head">
       <span class="head-icon">{{ icon("hosts", "i-lg") }}</span>
@@ -88,9 +106,12 @@
       {{ empty("hosts", "No hosts yet", "Add a Linux machine running Docker. Kiln connects to it over SSH.", "/hosts?add=1" if auth.can(Perm.HOSTS_WRITE) else None, "Add host") }}
     {% endif %}
   </section>
+  {% endif %}
 </div>
+{% endif %}
 
 <div class="grid grid-main">
+  {% if can_deps %}
   <section class="card">
     <div class="card-head">
       <span class="head-icon accent">{{ icon("rocket", "i-lg") }}</span>
@@ -105,7 +126,11 @@
       <li>
         <span class="tl-icon {{ kind }}">{{ icon({"succeeded": "check", "failed": "x"}.get(d.status, "clock")) }}</span>
         <a href="/deployments/{{ d.id }}" style="color:inherit">
+          {% if can_hosts %}
           <div class="tl-title">{{ d.instance.name }}<span>{{ {"succeeded": "Deployed to", "failed": "Failed on", "running": "Building on", "queued": "Queued for", "cancelled": "Cancelled on"}.get(d.status, "") }} {{ d.instance.host.name }}</span></div>
+          {% else %}
+          <div class="tl-title">{{ d.instance.name }}<span>{{ {"succeeded": "Deployed", "failed": "Failed", "running": "Building", "queued": "Queued", "cancelled": "Cancelled"}.get(d.status, "") }}</span></div>
+          {% endif %}
           <div class="tl-meta">{{ d.branch }}{% if d.short_sha %} · <span class="mono">{{ d.short_sha }}</span>{% endif %}{% if d.commit_message %} · {{ d.commit_message|truncate(60) }}{% endif %}</div>
         </a>
         <time>{{ d.created_at|timeago }}</time>
@@ -116,6 +141,7 @@
       {{ empty("rocket", "No deployments yet", "Create an instance from a repository to run your first deployment.", "/instances/new" if auth.can(Perm.INSTANCES_WRITE) else None, "Create instance") }}
     {% endif %}
   </section>
+  {% endif %}
 
   {% if not setup_done %}
   <section class="card">

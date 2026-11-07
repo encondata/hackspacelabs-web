@@ -3,10 +3,12 @@
  * Declarative hooks used by the templates:
  *   <button data-api="POST /api/v1/..." data-confirm="..." data-then="reload|redirect:/x|redirect:/x/{id}">
  *   <form data-form="POST /api/v1/..." data-then="...">   (fields → JSON; see serialize())
+ *   <form data-omit-unchanged="field ...">                 (leave those fields out of the body unless the user changed them)
  *   <button data-open="dialog-id">, <button data-close>
  *   <pre data-deploy-log="/api/v1/deployments/<id>">       (live build log)
  *   <div data-load="/api/v1/..." data-render="containers|logs|readme">
  *   <button data-copy="text"> / data-copy-target="#el"
+ *   <select data-fill> with <option data-fill-<field>="value">   (picking an option fills untouched fields)
  */
 (function () {
   "use strict";
@@ -29,7 +31,10 @@
     let data = null;
     try { data = await res.json(); } catch (e) { /* non-JSON */ }
     if (!res.ok) {
-      if (res.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname); }
+      // A 401 from the login endpoint is a wrong password, not an expired session; other 401s mean "sign in again".
+      if (res.status === 401 && !/^\/api\/v1\/auth\/login(?:[?#]|$)/.test(url) && location.pathname !== "/login") {
+        location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search);
+      }
       throw new Error(errorText(data) || res.statusText || "Request failed");
     }
     return data;
@@ -58,8 +63,18 @@
     setTimeout(() => el.remove(), kind === "error" ? 8000 : 3500);
   }
 
-  function flashAfterReload(message) {
-    try { sessionStorage.setItem("kiln-flash", message); } catch (e) { /* ignore */ }
+  function flashAfterReload(message, kind = "success") {
+    try { sessionStorage.setItem("kiln-flash", JSON.stringify({ message, kind })); } catch (e) { /* ignore */ }
+  }
+
+  // Resolve like the browser does (it strips tabs/newlines, so "/\t/evil" means "//evil") and stay on this origin.
+  function sameOrigin(url) {
+    try {
+      const target = new URL(url, location.href);
+      return target.origin === location.origin ? target.href : "/";
+    } catch (e) {
+      return "/";
+    }
   }
 
   function then(spec, data) {
@@ -67,7 +82,7 @@
     if (spec === "reload") return location.reload();
     if (spec.startsWith("redirect:")) {
       const url = spec.slice(9).replace(/\{(\w+)\}/g, (_, k) => encodeURIComponent((data && data[k]) || ""));
-      location.href = url;
+      location.href = sameOrigin(url);
     }
   }
 
@@ -90,6 +105,10 @@
       const data = await api(method, url, body);
       if (btn.dataset.success) {
         btn.dataset.then === "reload" ? flashAfterReload(btn.dataset.success) : toast(btn.dataset.success);
+      }
+      // e.g. DELETE /instances/{id} returns {ok, warning} when files had to be left on the host.
+      if (data && data.warning) {
+        btn.dataset.then ? flashAfterReload(data.warning, "warning") : toast(data.warning, "warning");
       }
       if (btn.dataset.output && data && data.output !== undefined) {
         const target = $(btn.dataset.output);
@@ -149,6 +168,18 @@
     return out;
   }
 
+  // Compares with the page as rendered, so e.g. a role saved without touching its boxes doesn't re-grant them.
+  function changed(el) {
+    if (el.type === "checkbox" || el.type === "radio") return el.checked !== el.defaultChecked;
+    return el.value !== el.defaultValue;
+  }
+
+  function omitUnchanged(form, body) {
+    (form.dataset.omitUnchanged || "").split(/\s+/).filter(Boolean).forEach((name) => {
+      if (!$$(`[name="${name}"]`, form).some(changed)) delete body[name];
+    });
+  }
+
   document.addEventListener("submit", async (ev) => {
     const form = ev.target.closest("form[data-form]");
     if (!form) return;
@@ -158,6 +189,7 @@
     const submit = ev.submitter || $('[type="submit"]', form);
     let body;
     try { body = serialize(form); } catch (err) { return toast("Invalid input: " + err.message, "error"); }
+    omitUnchanged(form, body);
     if (submit && submit.name) body[submit.name] = submit.value === "true" ? true : submit.value === "false" ? false : submit.value;
     setLoading(submit, true);
     try {
@@ -223,12 +255,47 @@
   });
 
   // ---------------------------------------------------------- copy
+  // navigator.clipboard only exists on HTTPS and localhost; plain-HTTP installs fall back to execCommand.
+  function legacyCopy(text, btn) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    (btn.closest("dialog") || document.body).appendChild(ta); // outside an open modal everything is inert
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { /* unsupported */ }
+    ta.remove();
+    btn.focus();
+    return ok;
+  }
+
+  async function copyText(text, btn) {
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* fall back */ }
+    }
+    return legacyCopy(text, btn);
+  }
+
+  function selectContents(el) {
+    if (!el || !window.getSelection) return false;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  }
+
   document.addEventListener("click", async (ev) => {
     const btn = ev.target.closest("[data-copy], [data-copy-target]");
     if (!btn) return;
-    const text = btn.dataset.copy || ($(btn.dataset.copyTarget) || {}).textContent || "";
-    try { await navigator.clipboard.writeText(text.trim()); toast("Copied to clipboard"); }
-    catch (e) { toast("Could not copy: " + e.message, "error"); }
+    const target = btn.dataset.copyTarget ? $(btn.dataset.copyTarget) : null;
+    const text = (btn.dataset.copy || (target && target.textContent) || "").trim();
+    if (await copyText(text, btn)) return toast("Copied to clipboard");
+    toast(selectContents(target) ? "Couldn't copy automatically. Press Ctrl+C (⌘C on Mac) to copy the selected text."
+      : "Couldn't copy to the clipboard. Select the text and copy it by hand.", "error");
   });
 
   // ------------------------------------------------------- theme
@@ -333,6 +400,23 @@
     target.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
+  // ----------------------------- option defaults: <select data-fill> + <option data-fill-<field>="value">
+  function fillFromOption(sel) {
+    const opt = sel.selectedOptions[0];
+    if (!opt || !sel.form) return;
+    Array.from(opt.attributes).forEach((attr) => {
+      if (!attr.name.startsWith("data-fill-")) return;
+      const fields = $$(`[name="${attr.name.slice(10)}"]`, sel.form);
+      if (fields.some((f) => f.dataset.edited !== undefined)) return; // keep what the user typed or picked
+      fields.forEach((f) => { if (f.type === "radio") f.checked = f.value === attr.value; else f.value = attr.value; });
+    });
+  }
+
+  function wireFill(sel) {
+    sel.form.addEventListener("input", (ev) => { if (ev.isTrusted && ev.target !== sel) ev.target.dataset.edited = ""; });
+    sel.addEventListener("change", () => fillFromOption(sel)); // runs before the form's preview/show-when listeners
+  }
+
   // ------------------------------------------------ instance form preview
   function wirePreview(form) {
     const update = () => {
@@ -375,10 +459,16 @@
   document.addEventListener("DOMContentLoaded", () => {
     try {
       const flash = sessionStorage.getItem("kiln-flash");
-      if (flash) { sessionStorage.removeItem("kiln-flash"); toast(flash); }
+      if (flash) {
+        sessionStorage.removeItem("kiln-flash");
+        let note = { message: flash, kind: "success" };
+        try { note = JSON.parse(flash); } catch (e) { /* plain text from an older page */ }
+        toast(note.message, note.kind === "warning" ? "warning" : "success");
+      }
     } catch (e) { /* ignore */ }
     $$("[data-deploy-log]").forEach(streamLog);
     $$("[data-load]").forEach(load);
+    $$("select[data-fill]").forEach(wireFill);
     $$("select[data-branches]").forEach((sel) => {
       sel.addEventListener("change", () => { $(sel.dataset.branches).dataset.current = ""; loadBranches(sel); });
       loadBranches(sel);

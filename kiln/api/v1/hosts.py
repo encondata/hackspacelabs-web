@@ -6,11 +6,11 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from kiln.api.deps import DB, Auth, not_found, require
 from kiln.core.permissions import Perm
-from kiln.models import Host, HostAuthMethod, HostStatus, Instance
+from kiln.models import Host, HostAuthMethod, HostStatus, Instance, InstanceStatus
 from kiln.schemas import HostCreate, HostOut, HostUpdate, host_out
 from kiln.services import audit, ssh
 from kiln.services.auth import AuthContext
@@ -96,23 +96,49 @@ async def get_host(host_id: uuid.UUID, ctx: Reader, db: DB) -> HostOut:
     return host_out(await _get(db, host_id))
 
 
+async def _deployed_instances(db: DB, host: Host) -> int:
+    """Instances on the host that have ever been deployed (they have files under its deploy root)."""
+    ever_deployed = or_(
+        Instance.status != InstanceStatus.CREATED,
+        Instance.current_commit_sha.is_not(None),
+        Instance.last_deployed_at.is_not(None),
+    )
+    stmt = select(func.count()).select_from(Instance).where(Instance.host_id == host.id, ever_deployed)
+    return await db.scalar(stmt) or 0
+
+
 @router.patch("/{host_id}")
 async def update_host(host_id: uuid.UUID, body: HostUpdate, ctx: Writer, request: Request, db: DB) -> HostOut:
     host = await _get(db, host_id)
+    if body.deploy_root is not None and body.deploy_root != host.deploy_root:
+        if deployed := await _deployed_instances(db, host):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"{deployed} instance(s) on this host have been deployed; destroy them before changing the deploy root",
+            )
     if body.name and body.name != host.name:
         if await db.scalar(select(Host).where(Host.name == body.name)):
             raise HTTPException(status.HTTP_409_CONFLICT, "A host with this name already exists")
         host.name = body.name
     moved = (body.hostname and body.hostname != host.hostname) or (body.port and body.port != host.port)
+    old_address, old_fingerprint = host.address, host.host_key_fingerprint
     for field in ("hostname", "port", "username", "environment", "description", "deploy_root"):
         value = getattr(body, field)
         if value is not None:
             setattr(host, field, value)
-    if moved:  # a different machine: forget the pinned host key
+    _apply_credentials(host, body)
+    summary = f"Updated host {host.name}"
+    if moved:  # possibly a different machine: forget the pinned host key and re-verify
         host.host_key = host.host_key_fingerprint = None
         host.status = HostStatus.UNKNOWN
-    _apply_credentials(host, body)
-    audit.record(db, "host.update", actor=ctx.user, target=host, summary=f"Updated host {host.name}", request=request)
+        host.last_error = None
+        summary += f" (address {old_address} -> {host.address})"
+    audit.record(db, "host.update", actor=ctx.user, target=host, summary=summary, request=request)
+    if moved and old_fingerprint:
+        audit.record(
+            db, "host.key_reset", actor=ctx.user, target=host, request=request,
+            summary=f"Cleared pinned key {old_fingerprint} for {host.name}: address changed to {host.address}",
+        )
     await db.commit()
     return host_out(host)
 
@@ -135,15 +161,10 @@ async def check(host_id: uuid.UUID, ctx: Auth, request: Request, db: DB) -> Host
     needed = Perm.HOSTS_READ if host.is_pinned else Perm.HOSTS_WRITE
     if not ctx.can(needed):
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"Missing permission: {needed}")
-    was_pinned = host.is_pinned
-    await check_host(db, host)
-    if host.is_pinned and not was_pinned:
-        audit.record(
-            db, "host.key_pinned", actor=ctx.user, target=host,
-            summary=f"Pinned host key {host.host_key_fingerprint} for {host.name}", request=request,
-        )
-        await db.commit()
-    return host_out(host)
+    checked = await check_host(db, host, actor=ctx.user, request=request)
+    if checked is None:
+        raise not_found("Host")
+    return host_out(checked)
 
 
 @router.post("/{host_id}/reset-host-key")
@@ -152,6 +173,7 @@ async def reset_host_key(host_id: uuid.UUID, ctx: Writer, request: Request, db: 
     old = host.host_key_fingerprint
     host.host_key = host.host_key_fingerprint = None
     host.status = HostStatus.UNKNOWN
+    host.last_error = None
     audit.record(db, "host.key_reset", actor=ctx.user, target=host, summary=f"Reset pinned key {old} for {host.name}", request=request)
     await db.commit()
     return host_out(host)

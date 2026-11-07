@@ -9,8 +9,10 @@ import os
 from functools import lru_cache
 from typing import Annotated, Literal
 
+from cryptography.fernet import Fernet
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 log = logging.getLogger(__name__)
 
@@ -26,11 +28,15 @@ class Settings(BaseSettings):
         env_file=os.environ.get("KILN_ENV_FILE", ".env") or None,
         env_file_encoding="utf-8",
         extra="ignore",
+        # Keep secrets out of configuration error messages.
+        hide_input_in_errors=True,
     )
 
     env: Literal["development", "production", "test"] = "development"
     base_url: str = "http://localhost:8000"
     log_level: str = "INFO"
+    # Proxies trusted to set X-Forwarded-For/-Proto (comma-separated IPs or CIDRs, passed to uvicorn).
+    forwarded_allow_ips: str = "127.0.0.1"
 
     # Signs nothing user-visible today but is the root secret for derived keys.
     secret_key: str = DEV_SECRET
@@ -39,6 +45,8 @@ class Settings(BaseSettings):
     encryption_key: str = ""
 
     database_url: str = "postgresql+asyncpg://kiln:kiln@localhost:5432/kiln"
+    # Optional; used unless a configured database_url has its own password. It may contain any character.
+    database_password: str | None = None
     database_echo: bool = False
 
     session_ttl_hours: int = 24 * 14
@@ -77,6 +85,15 @@ class Settings(BaseSettings):
     def _strip_slash(cls, value: str) -> str:
         return value.rstrip("/")
 
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _log_level(cls, value: object) -> object:
+        if isinstance(value, str):
+            value = value.strip().upper()
+            if value not in logging.getLevelNamesMapping():
+                raise ValueError("KILN_LOG_LEVEL must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL")
+        return value
+
     @model_validator(mode="after")
     def _check_production(self) -> Settings:
         if self.env == "production":
@@ -86,6 +103,33 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "KILN_ENCRYPTION_KEY must be set in production (run `kiln generate-secrets`)"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _check_encryption_keys(self) -> Settings:
+        if not self.encryption_key:
+            return self
+        keys = self.fernet_keys()
+        if not keys:
+            raise ValueError("KILN_ENCRYPTION_KEY contains no keys (run `kiln generate-secrets`)")
+        for i, key in enumerate(keys, 1):
+            try:
+                Fernet(key)
+            except ValueError:
+                raise ValueError(
+                    f"KILN_ENCRYPTION_KEY entry {i} is not a valid Fernet key (run `kiln generate-secrets`)"
+                ) from None
+        return self
+
+    @model_validator(mode="after")
+    def _apply_database_password(self) -> Settings:
+        if self.database_password is None:
+            return self
+        url = make_url(self.database_url)
+        # A password written into a configured KILN_DATABASE_URL wins, so an overridden URL keeps working.
+        url_has_password = url.password is not None and "database_url" in self.model_fields_set
+        if url.get_backend_name() != "sqlite" and not url_has_password:
+            self.database_url = url.set(password=self.database_password).render_as_string(hide_password=False)
         return self
 
     @property

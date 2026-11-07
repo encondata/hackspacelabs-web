@@ -86,10 +86,10 @@
 
 {% if auth.can(Perm.INSTANCES_WRITE) %}
 <section class="card">
-  <div class="card-head"><span class="head-icon" style="color: var(--error)">{{ icon("alert", "i-lg") }}</span><div><h2>Danger zone</h2><p>Destroying removes the containers, images and release files from {{ instance.host.name }}.</p></div></div>
+  <div class="card-head"><span class="head-icon" style="color: var(--error)">{{ icon("alert", "i-lg") }}</span><div><h2>Danger zone</h2><p>Destroying removes the containers, images and release files from {{ instance.host.name }}.{% if instance.status == "deploying" %} Wait for the running deployment to finish first.{% endif %}</p></div></div>
   <div class="card-body row wrap">
-    <button class="btn btn-danger solid" data-api="DELETE /api/v1/instances/{{ instance.id }}" data-confirm="Destroy {{ instance.name }}? Containers and files on {{ instance.host.name }} will be removed." data-then="redirect:/instances">{{ icon("trash") }} Destroy instance</button>
-    <button class="btn btn-danger" data-api="DELETE /api/v1/instances/{{ instance.id }}?purge=false" data-confirm="Remove {{ instance.name }} from Kiln but leave everything running on the host?" data-then="redirect:/instances">Remove from Kiln only</button>
+    <button class="btn btn-danger solid" data-api="DELETE /api/v1/instances/{{ instance.id }}" {{ 'disabled' if instance.status == 'deploying' }} data-confirm="Destroy {{ instance.name }}? Containers and files on {{ instance.host.name }} will be removed." data-then="redirect:/instances">{{ icon("trash") }} Destroy instance</button>
+    <button class="btn btn-danger" data-api="DELETE /api/v1/instances/{{ instance.id }}?purge=false" {{ 'disabled' if instance.status == 'deploying' }} data-confirm="Remove {{ instance.name }} from Kiln but leave everything running on the host?" data-then="redirect:/instances">Remove from Kiln only</button>
   </div>
 </section>
 {% endif %}

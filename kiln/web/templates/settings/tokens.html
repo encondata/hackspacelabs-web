@@ -21,7 +21,7 @@
 </section>
 
 <dialog class="modal" id="new-token">
-  <form data-form="POST /api/v1/tokens" data-result-field="token" data-result-target="#token-value">
+  <form method="post" action="/js-required" data-form="POST /api/v1/tokens" data-result-field="token" data-result-target="#token-value">
     <div class="modal-head"><h2>New API token</h2><button class="icon-btn" type="button" data-close aria-label="Close">{{ icon("x") }}</button></div>
     <div class="modal-body">
       <div class="field"><label for="tok-name">Name</label><input class="input" id="tok-name" name="name" placeholder="GitHub Actions" required></div>

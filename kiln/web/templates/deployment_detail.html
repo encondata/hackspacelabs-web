@@ -6,7 +6,7 @@
   <div>
     <div class="breadcrumb"><a href="/deployments">Deployments</a>{{ icon("chevron-right", "i-sm") }}<a href="/instances/{{ dep.instance.id }}">{{ dep.instance.name }}</a></div>
     <h1 class="row">{{ dep.instance.name }} {{ badge("deployment", dep.status) }}</h1>
-    <p class="lede">{{ dep.instance.repository.full_name }} · <span class="mono">{{ dep.branch }}</span> → {{ dep.instance.host.name }}</p>
+    <p class="lede">{% if auth.can(Perm.REPOS_READ) %}{{ dep.instance.repository.full_name }} · {% endif %}<span class="mono">{{ dep.branch }}</span>{% if auth.can(Perm.HOSTS_READ) %} → {{ dep.instance.host.name }}{% endif %}</p>
   </div>
   <div class="actions">
     <a class="btn" href="/instances/{{ dep.instance.id }}">{{ icon("box") }} Open instance</a>

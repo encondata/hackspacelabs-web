@@ -55,7 +55,7 @@ def test_dockerfile_commands_are_quoted():
     build, rm, run = deployer.build_commands(inst, "/opt/kiln/web-prod/releases/a1b2c3d4e5f6", SHA)
     assert "-f 'docker/Dockerfile prod'" in build and build.endswith(" src")
     assert "kiln/web-prod:a1b2c3d4e5f6" in build
-    assert rm.startswith("docker rm -f kiln-web-prod")
+    assert rm.startswith("docker ps -aq --filter label=kiln.instance=00000000-0000-0000-0000-000000000001")
     assert "-p 8080:3000/tcp" in run and "-v /var/lib/web:/data" in run
     assert "--env-file /opt/kiln/web-prod/shared/.env" in run
     assert "--label kiln.instance=00000000-0000-0000-0000-000000000001" in run
@@ -63,11 +63,13 @@ def test_dockerfile_commands_are_quoted():
 
 def test_compose_commands():
     inst = _instance(build_source="compose", compose_file="compose.yaml")
-    [cmd] = deployer.build_commands(inst, "/opt/kiln/web-prod/releases/x", SHA)
-    assert "docker compose -p kiln-web-prod -f compose.yaml up -d --build" in cmd
-    assert "ln -sfn /opt/kiln/web-prod/shared/.env .env" in cmd
-    assert deployer.control_command(inst, "stop").endswith("docker compose -p kiln-web-prod -f compose.yaml stop")
-    assert "rm -rf -- /opt/kiln/web-prod" in deployer.destroy_command(inst)
+    env_cmd, _, cmd = deployer.build_commands(inst, "/opt/kiln/web-prod/releases/x", SHA)
+    compose = "docker compose -p kiln-web-prod --env-file /opt/kiln/web-prod/shared/.env -f compose.yaml"
+    assert f"{compose} up -d --build" in cmd
+    assert env_cmd.startswith("cd /opt/kiln/web-prod/releases/x &&")
+    assert "ln -sfn /opt/kiln/web-prod/shared/.env .env" in env_cmd
+    assert deployer.control_command(inst, "stop").endswith(f"{compose} stop")
+    assert "rm -rf -- /opt/kiln/web-prod" in deployer.remove_dir_command(inst)
     with pytest.raises(ValueError):
         deployer.control_command(inst, "explode")
 
@@ -87,11 +89,17 @@ class FakeGitHub:
     async def __aexit__(self, *exc):
         return None
 
-    async def get_commit(self, full_name, ref):
-        FakeGitHub.calls.append(f"commit {full_name}@{ref}")
+    async def get_repository(self, repo_id):
+        FakeGitHub.calls.append(f"repo {repo_id}")
+        return {"id": repo_id, "full_name": "acme/web", "owner": {"login": "acme"}, "name": "web",
+                "html_url": "https://github.com/acme/web"}
+
+    async def get_commit(self, repo_id, ref):
+        FakeGitHub.calls.append(f"commit {repo_id}@{ref}")
         return CommitInfo(sha=SHA, message="feat: ship it", author="octocat", date=None)
 
-    async def download_tarball(self, full_name, sha, dest: Path):
+    async def download_tarball(self, repo_id, sha, dest: Path):
+        FakeGitHub.calls.append(f"tarball {repo_id}@{sha}")
         dest.write_bytes(b"fake-tarball")
         return 12
 
@@ -152,10 +160,12 @@ async def test_successful_deployment():
         assert dep.commit_sha == SHA and dep.commit_message == "feat: ship it"
         assert dep.instance.status == "running" and dep.instance.current_commit_sha == SHA
         assert "Step 1/3" in dep.log and "Deployment succeeded" in dep.log
+    release = f"/opt/kiln/web-prod/releases/a1b2c3d4e5f6-{dep_id.hex[:8]}"
     assert remote.files["/opt/kiln/web-prod/shared/.env"] == "NODE_ENV=production\n"
-    assert remote.files["/opt/kiln/web-prod/releases/a1b2c3d4e5f6.tar.gz"] == "fake-tarball"
+    assert remote.files[f"/opt/kiln/web-prod/releases/.upload-{dep_id.hex}.tar.gz"] == "fake-tarball"
     assert any("docker build" in c for c in remote.commands)
-    assert any(c.startswith("ln -sfn /opt/kiln/web-prod/releases/a1b2c3d4e5f6 /opt/kiln/web-prod/current") for c in remote.commands)
+    assert f"ln -sfn {release} /opt/kiln/web-prod/current" in remote.commands
+    assert FakeGitHub.calls[-3:] == ["repo 42", "commit 42@main", f"tarball 42@{SHA}"]
     # The GitHub token never appears in anything sent to the host.
     assert not any("token" in c.lower() for c in remote.commands)
 

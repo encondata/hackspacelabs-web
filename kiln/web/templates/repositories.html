@@ -2,6 +2,7 @@
 {% from "_macros.html" import icon, badge, stat, empty, repo_icon %}
 {% block title %}Repositories{% endblock %}
 {% block content %}
+{% set can_instances = auth.can(Perm.INSTANCES_READ) %}
 <div class="page-head">
   <div>
     <h1>Repositories</h1>
@@ -18,10 +19,10 @@
   </div>
 </div>
 
-<div class="grid grid-4">
+<div class="grid {{ 'grid-4' if can_instances else 'grid-3' }}">
   {% call stat("repositories", "Total Repositories", stats.total) %}{% if last_sync %}Synced {{ last_sync|timeago }}{% else %}Never synced{% endif %}{% endcall %}
   {% call stat("box", "Docker-ready", stats.deployable) %}Dockerfile or compose file found{% endcall %}
-  {% call stat("rocket", "Deployed", stats.deployed) %}Have at least one instance{% endcall %}
+  {% if can_instances %}{% call stat("rocket", "Deployed", stats.deployed) %}Have at least one instance{% endcall %}{% endif %}
   {% call stat("package", "Not Configured", stats.unconfigured) %}No Dockerfile or compose file{% endcall %}
 </div>
 
@@ -31,7 +32,7 @@
     <input type="hidden" name="show" value="{{ show }}">
   </form>
   <nav class="segmented" aria-label="Filter">
-    {% for key, label in [("all", "All"), ("deployable", "Docker-ready"), ("deployed", "Deployed"), ("unconfigured", "No instances")] %}
+    {% for key, label in [("all", "All"), ("deployable", "Docker-ready")] + ([("deployed", "Deployed"), ("unconfigured", "No instances")] if can_instances else []) %}
     <a href="?show={{ key }}{% if q %}&q={{ q|urlencode }}{% endif %}" class="{{ 'active' if show == key }}">{{ label }}</a>
     {% endfor %}
   </nav>
@@ -40,7 +41,7 @@
 <section class="card">
   {% if repos %}
   <div class="table-wrap"><table class="table">
-    <thead><tr><th>Repository</th><th>Visibility</th><th>Default Branch</th><th>Docker Ready</th><th>Last Deploy</th><th>Status</th><th class="num">Actions</th></tr></thead>
+    <thead><tr><th>Repository</th><th>Visibility</th><th>Default Branch</th><th>Docker Ready</th>{% if can_instances %}<th>Last Deploy</th><th>Status</th>{% endif %}<th class="num">Actions</th></tr></thead>
     <tbody>
     {% for r in repos %}{% set s = summaries[r.id] %}
       <tr class="{{ 'selected' if selected and selected.id == r.id }}">
@@ -48,8 +49,10 @@
         <td class="nowrap">{{ icon("lock" if r.is_private else "globe", "i-sm") }} {{ r.visibility|title }}</td>
         <td><span class="chip">{{ icon("branch", "i-sm") }} {{ r.default_branch }}</span></td>
         <td class="nowrap">{% if r.deployable %}<span style="color: var(--success)">{{ icon("check", "i-sm") }}</span> {{ "Compose" if r.compose_file and not r.has_dockerfile else "Yes" }}{% elif r.detected_at %}<span class="muted">No</span>{% else %}<span class="subtle">Unknown</span>{% endif %}</td>
+        {% if can_instances %}
         <td class="nowrap">{% if s.last %}{{ s.last|timeago }}<div class="subtle mono">{{ s.sha }}</div>{% else %}<span class="subtle">—</span>{% endif %}</td>
         <td>{{ badge("repo", s.state) }}</td>
+        {% endif %}
         <td class="actions-cell">
           {% if auth.can(Perm.INSTANCES_WRITE) and not r.archived %}
             {% if s.count %}<a class="btn btn-sm" href="?repo={{ r.id }}&show={{ show }}">View Details</a>
@@ -101,19 +104,21 @@
           {% else %}<span class="muted">Not checked yet.</span>{% endif %}
         </div>
       </div>
+      {% if can_instances %}
       <div class="card" style="box-shadow:none">
         <div class="card-head"><span class="head-icon">{{ icon("box") }}</span><h3>Instances ({{ selected_instances|length }})</h3></div>
         <div class="card-body">
           {% for i in selected_instances %}
             <div class="row between" style="padding: 6px 0">
               <a href="/instances/{{ i.id }}"><strong>{{ i.name }}</strong></a>
-              <span class="row"><span class="chip">{{ icon("branch", "i-sm") }} {{ i.branch }}</span><span class="muted">{{ i.host.name }}</span>{{ badge("instance", i.status) }}</span>
+              <span class="row"><span class="chip">{{ icon("branch", "i-sm") }} {{ i.branch }}</span>{% if auth.can(Perm.HOSTS_READ) %}<span class="muted">{{ i.host.name }}</span>{% endif %}{{ badge("instance", i.status) }}</span>
             </div>
           {% else %}
             <p class="muted">No instances of this repository yet.</p>
           {% endfor %}
         </div>
       </div>
+      {% endif %}
     </div>
   </div>
 </section>

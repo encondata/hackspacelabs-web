@@ -74,7 +74,7 @@ async def branches(repo_id: uuid.UUID, ctx: Reader, db: DB) -> list[str]:
     token, _ = github_token_for(ctx.user)
     try:
         async with GitHubClient(token) as gh:
-            names = await gh.list_branches(repo.full_name)
+            names = await gh.list_branches(repo.github_id)
     except GitHubError as exc:
         raise _gh_error(exc) from exc
     # Default branch first.
@@ -85,8 +85,11 @@ async def branches(repo_id: uuid.UUID, ctx: Reader, db: DB) -> list[str]:
 async def readme(repo_id: uuid.UUID, ctx: Reader, db: DB) -> dict[str, str | None]:
     repo = await _get(db, repo_id)
     token, _ = github_token_for(ctx.user)
-    async with GitHubClient(token) as gh:
-        return {"content": await gh.get_readme(repo.full_name)}
+    try:
+        async with GitHubClient(token) as gh:
+            return {"content": await gh.get_readme(repo.github_id)}
+    except GitHubError as exc:
+        raise _gh_error(exc) from exc
 
 
 @router.post("/{repo_id}/detect")
@@ -95,9 +98,10 @@ async def detect(repo_id: uuid.UUID, ctx: Syncer, db: DB, branch: str | None = N
     token, _ = github_token_for(ctx.user)
     try:
         async with GitHubClient(token) as gh:
-            repo.detected_config = await gh.detect_config(repo.full_name, branch or repo.default_branch)
+            config = await gh.detect_config(repo.github_id, branch or repo.default_branch)
     except GitHubError as exc:
         raise _gh_error(exc) from exc
+    repo.detected_config = config
     repo.detected_at = utcnow()
     await db.commit()
     return RepoOut.of(repo)

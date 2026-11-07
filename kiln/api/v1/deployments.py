@@ -5,8 +5,9 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from sqlalchemy import select
+from sqlalchemy.orm import defer
 
 from kiln.api.deps import DB, not_found, require
 from kiln.core.permissions import Perm
@@ -21,9 +22,13 @@ Reader = Annotated[AuthContext, require(Perm.DEPLOYMENTS_READ)]
 
 @router.get("")
 async def list_deployments(
-    ctx: Reader, db: DB, instance_id: uuid.UUID | None = None, status: str | None = None, limit: int = 50
+    ctx: Reader,
+    db: DB,
+    instance_id: uuid.UUID | None = None,
+    status: Annotated[str | None, Query(max_length=16)] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> list[DeploymentOut]:
-    stmt = select(Deployment).order_by(Deployment.created_at.desc()).limit(max(1, min(limit, 200)))
+    stmt = select(Deployment).options(defer(Deployment.log, raiseload=True)).order_by(Deployment.created_at.desc()).limit(limit)
     if instance_id:
         stmt = stmt.where(Deployment.instance_id == instance_id)
     if status:
@@ -32,7 +37,9 @@ async def list_deployments(
 
 
 @router.get("/{deployment_id}")
-async def get_deployment(deployment_id: uuid.UUID, ctx: Reader, db: DB, log_offset: int = 0) -> DeploymentDetail:
+async def get_deployment(
+    deployment_id: uuid.UUID, ctx: Reader, db: DB, log_offset: Annotated[int, Query(ge=0)] = 0
+) -> DeploymentDetail:
     """``log_offset`` lets the UI poll for only the new part of the build log."""
     dep = await db.get(Deployment, deployment_id, populate_existing=True)
     if dep is None:

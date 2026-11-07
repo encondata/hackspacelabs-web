@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from sqlalchemy import select
 
 from kiln.api.deps import DB, require
@@ -13,14 +13,20 @@ from kiln.services.auth import AuthContext
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
+MAX_OFFSET = 2**31 - 1  # PostgreSQL binds OFFSET as a 32-bit integer
+
 
 @router.get("")
 async def list_events(
-    ctx: Annotated[AuthContext, require(Perm.AUDIT_READ)], db: DB, limit: int = 100, offset: int = 0, action: str | None = None
+    ctx: Annotated[AuthContext, require(Perm.AUDIT_READ)],
+    db: DB,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
+    action: Annotated[str | None, Query(max_length=64)] = None,
 ) -> list[AuditOut]:
-    stmt = select(AuditEvent).order_by(AuditEvent.created_at.desc()).limit(min(limit, 500)).offset(max(offset, 0))
+    stmt = select(AuditEvent).order_by(AuditEvent.created_at.desc()).limit(limit).offset(offset)
     if action:
-        stmt = stmt.where(AuditEvent.action.startswith(action))
+        stmt = stmt.where(AuditEvent.action.startswith(action, autoescape=True))
     return [
         AuditOut(
             id=e.id,

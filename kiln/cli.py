@@ -1,4 +1,5 @@
-"""Command-line helpers: ``kiln serve``, ``kiln migrate``, ``kiln create-admin``, ``kiln generate-secrets``."""
+"""Command-line helpers: ``kiln serve``, ``kiln migrate``, ``kiln create-admin``, ``kiln generate-secrets``,
+``kiln rotate-encryption-key``."""
 
 from __future__ import annotations
 
@@ -8,14 +9,20 @@ import getpass
 import os
 import secrets
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from cryptography.fernet import Fernet
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def generate_secrets() -> None:
     print(f"KILN_SECRET_KEY={secrets.token_urlsafe(48)}")
     print(f"KILN_ENCRYPTION_KEY={Fernet.generate_key().decode()}")
+    print(f"POSTGRES_PASSWORD={secrets.token_urlsafe(24)}")
 
 
 def migrate() -> None:
@@ -30,35 +37,180 @@ def migrate() -> None:
     command.upgrade(Config(str(ini)), "head")
 
 
-async def _create_admin(email: str, password: str, name: str) -> None:
-    from kiln.db.session import dispose_engine, get_sessionmaker
-    from kiln.services.users import UserError, create_user, get_role, get_user_by_email, seed_system_roles
+def _read_password() -> str:
+    from kiln.services.users import UserError
 
-    async with get_sessionmaker()() as db:
-        await seed_system_roles(db)
-        existing = await get_user_by_email(db, email)
-        try:
-            if existing:
-                admin = await get_role(db, "admin")
-                if admin not in existing.roles:
-                    existing.roles.append(admin)
-                print(f"{email} already exists; granted the admin role.")
-            else:
-                await create_user(db, email=email, password=password, full_name=name, role_names=["admin"])
-                print(f"Created admin {email}.")
-        except UserError as exc:
-            sys.exit(f"Error: {exc}")
-        await db.commit()
-    await dispose_engine()
+    try:
+        password = getpass.getpass("Password (10+ characters): ")
+        # A password piped in on stdin is read once; only a typed one is confirmed.
+        if sys.stdin.isatty() and getpass.getpass("Repeat password: ") != password:
+            raise UserError("Passwords do not match")
+    except EOFError:
+        raise UserError("No password given") from None
+    return password
+
+
+async def _password_needed(db: AsyncSession, args: argparse.Namespace) -> bool:
+    """create-admin prompts for a new account, or with --reset-password, unless --password was given."""
+    from kiln.services.users import get_user_by_email
+
+    if args.password:
+        return False
+    return args.reset_password or await get_user_by_email(db, args.email) is None
+
+
+async def _ensure_admin(db: AsyncSession, args: argparse.Namespace) -> list[str]:
+    """Create ``args.email`` as an admin, or grant admin to the existing account. Returns what was done."""
+    from sqlalchemy import delete, func, select
+
+    from kiln.core.security import hash_password
+    from kiln.models import ApiToken, UserSession
+    from kiln.services import audit
+    from kiln.services.auth import revoke_user_sessions
+    from kiln.services.users import (
+        UserError,
+        check_password_strength,
+        create_user,
+        get_role,
+        get_user_by_email,
+        seed_system_roles,
+    )
+
+    await seed_system_roles(db)
+    user = await get_user_by_email(db, args.email)
+    if user is None:
+        if not args.password:
+            raise UserError("A new account needs a password")
+        user = await create_user(
+            db, email=args.email, password=args.password, full_name=args.name, role_names=["admin"]
+        )
+        audit.record(db, "user.create", target=user, summary=f"Created admin {user.email} with kiln create-admin")
+        return [f"Created admin {user.email}."]
+
+    if args.password and not args.reset_password:
+        raise UserError(f"{user.email} already exists; add --reset-password to change its password. Nothing was changed.")
+    new_password = args.password if args.reset_password else None
+    if args.reset_password:
+        check_password_strength(new_password or "")
+
+    github = f"@{user.github.login}" if user.github else "none"
+    lines = [
+        f"{user.email} already exists (created {user.created_at:%Y-%m-%d}, active: {'yes' if user.is_active else 'no'}, "
+        f"password: {'set' if user.password_hash else 'none'}, GitHub: {github})."
+    ]
+    changes = []
+    admin = await get_role(db, "admin")
+    if admin in user.roles:
+        lines.append("Already an admin.")
+    else:
+        user.roles.append(admin)
+        changes.append("granted admin")
+        lines.append("Granted the admin role.")
+
+    if new_password is None:
+        lines.append("Password NOT changed (use --reset-password to set a new one).")
+    else:
+        user.password_hash = hash_password(new_password)
+        sessions = await db.scalar(select(func.count()).select_from(UserSession).where(UserSession.user_id == user.id))
+        await revoke_user_sessions(db, user)
+        tokens = (await db.execute(delete(ApiToken).where(ApiToken.user_id == user.id))).rowcount
+        changes.append("password reset")
+        lines.append(f"Password reset; signed out {sessions} session(s) and deleted {tokens} API token(s).")
+
+    if not user.is_active and args.activate:
+        user.is_active = True
+        changes.append("reactivated")
+        lines.append("Account reactivated.")
+    elif not user.is_active:
+        lines.append("Account is still INACTIVE and cannot sign in (use --activate).")
+
+    if changes:
+        audit.record(db, "user.update", target=user, summary=f"kiln create-admin: {', '.join(changes)}")
+    return lines
+
+
+async def _with_db[T](action: Callable[[AsyncSession, argparse.Namespace], Awaitable[T]], args: argparse.Namespace) -> T:
+    """Run ``action`` in one committed session, then close the engine (each CLI command runs its own loop)."""
+    from kiln.db.session import dispose_engine, get_sessionmaker
+
+    try:
+        async with get_sessionmaker()() as db:
+            result = await action(db, args)
+            await db.commit()
+            return result
+    finally:
+        await dispose_engine()
 
 
 def create_admin(args: argparse.Namespace) -> None:
-    password = args.password or getpass.getpass("Password (10+ characters): ")
-    asyncio.run(_create_admin(args.email, password, args.name))
+    from kiln.services.users import UserError
+
+    try:
+        # Prompt outside the event loop so Ctrl-C at the prompt stops the command straight away.
+        if asyncio.run(_with_db(_password_needed, args)):
+            args.password = _read_password()
+        lines = asyncio.run(_with_db(_ensure_admin, args))
+    except UserError as exc:
+        sys.exit(f"Error: {exc}")
+    except KeyboardInterrupt:
+        sys.exit("\nCancelled; nothing was changed.")
+    print("\n".join(lines))
+
+
+async def _rotate_secrets(db: AsyncSession, *, clear_unreadable: bool = False) -> tuple[int, list[str]]:
+    """Re-encrypt every stored secret with the first key, bypassing the ORM types.
+
+    Returns the number re-encrypted and a description of each value no configured key could decrypt.
+    """
+    from sqlalchemy import Text, column, select, table, update
+
+    import kiln.models  # noqa: F401  (registers every table on Base.metadata)
+    from kiln.core.crypto import DecryptionError, encrypted_columns, rotate
+    from kiln.db.base import Base
+
+    rotated, unreadable = 0, []
+    for source, col in encrypted_columns(Base.metadata):
+        raw = table(source.name, column("id", source.c.id.type), column(col.name, Text()))
+        value_col = raw.c[col.name]
+        rows = (await db.execute(select(raw.c.id, value_col).where(value_col.is_not(None)).with_for_update())).all()
+        for row_id, token in rows:
+            try:
+                new = rotate(token)
+            except DecryptionError:
+                unreadable.append(f"{source.name}.{col.name} (id {row_id})")
+                if not clear_unreadable:
+                    continue
+                new = None
+            else:
+                rotated += 1
+            await db.execute(update(raw).where(raw.c.id == row_id).values({col.name: new}))
+    return rotated, unreadable
+
+
+def rotate_encryption_key(args: argparse.Namespace) -> None:
+    rotated, unreadable = asyncio.run(
+        _with_db(lambda db, a: _rotate_secrets(db, clear_unreadable=a.clear_unreadable), args)
+    )
+    print(f"Re-encrypted {rotated} secret(s) with the first KILN_ENCRYPTION_KEY.")
+    if not unreadable:
+        print("Older keys can now be removed from KILN_ENCRYPTION_KEY.")
+        return
+    if args.clear_unreadable:
+        print(f"Erased {len(unreadable)} secret(s) no configured key could decrypt; re-enter them in Kiln:")
+        print("\n".join(f"  {u}" for u in unreadable))
+        return
+    print(f"{len(unreadable)} secret(s) could not be decrypted with any configured key and were left unchanged:")
+    print("\n".join(f"  {u}" for u in unreadable))
+    sys.exit(
+        "Keep the old key: add it after the new one in KILN_ENCRYPTION_KEY and run this again. "
+        "If it is lost, re-enter those secrets in Kiln or rerun with --clear-unreadable."
+    )
 
 
 def serve(args: argparse.Namespace) -> None:
     import uvicorn
+
+    from kiln.core.config import get_settings
 
     uvicorn.run(
         "kiln.main:app",
@@ -66,11 +218,11 @@ def serve(args: argparse.Namespace) -> None:
         port=args.port,
         reload=args.reload,
         proxy_headers=True,
-        forwarded_allow_ips="*",
+        forwarded_allow_ips=get_settings().forwarded_allow_ips,
     )
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="kiln", description="Kiln management commands")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -80,14 +232,34 @@ def main() -> None:
     p.add_argument("--reload", action="store_true")
 
     sub.add_parser("migrate", help="Apply database migrations")
-    sub.add_parser("generate-secrets", help="Print fresh KILN_SECRET_KEY / KILN_ENCRYPTION_KEY values")
+    sub.add_parser(
+        "generate-secrets", help="Print fresh KILN_SECRET_KEY / KILN_ENCRYPTION_KEY / POSTGRES_PASSWORD values"
+    )
 
-    p = sub.add_parser("create-admin", help="Create an admin user (or grant admin to an existing one)")
+    p = sub.add_parser("create-admin", help="Create an admin user, or grant admin to an existing one")
     p.add_argument("email")
-    p.add_argument("--name", default="Administrator")
-    p.add_argument("--password", help="Prompted for if omitted")
+    p.add_argument("--name", default="Administrator", help="Full name for a new account")
+    p.add_argument("--password", help="Password for a new account (prompted for if omitted), or with --reset-password")
+    p.add_argument(
+        "--reset-password",
+        action="store_true",
+        help="Existing account: set a new password, sign out its sessions and delete its API tokens",
+    )
+    p.add_argument("--activate", action="store_true", help="Existing account: reactivate it if it was deactivated")
 
-    args = parser.parse_args()
+    p = sub.add_parser(
+        "rotate-encryption-key", help="Re-encrypt stored secrets with the first key in KILN_ENCRYPTION_KEY"
+    )
+    p.add_argument(
+        "--clear-unreadable",
+        action="store_true",
+        help="Erase secrets no configured key can decrypt (they must then be re-entered)",
+    )
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     if args.command == "serve":
         serve(args)
     elif args.command == "migrate":
@@ -96,6 +268,8 @@ def main() -> None:
         generate_secrets()
     elif args.command == "create-admin":
         create_admin(args)
+    elif args.command == "rotate-encryption-key":
+        rotate_encryption_key(args)
 
 
 if __name__ == "__main__":
