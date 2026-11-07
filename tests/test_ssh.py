@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shlex
+
 import asyncssh
 import pytest
 
@@ -42,8 +44,15 @@ class _Server(asyncssh.SSHServer):
         return password == "s3cret"
 
 
+def sent_command(process: asyncssh.SSHServerProcess) -> str:
+    """The command as Kiln built it: run() sends ``exec /bin/sh -c <quoted command>``."""
+    words = shlex.split(process.command or "")
+    assert words[:3] == ["exec", "/bin/sh", "-c"] and len(words) == 4, process.command
+    return words[3]
+
+
 async def _handle(process: asyncssh.SSHServerProcess) -> None:
-    cmd = process.command or ""
+    cmd = sent_command(process)
     if "os-release" in cmd:
         process.stdout.write(PROBE_OUTPUT)
         process.exit(0)

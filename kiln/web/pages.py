@@ -191,6 +191,16 @@ def instance_summary(instances: list[Instance]) -> dict[str, Any]:
     }
 
 
+async def env_unreadable(db: DB, instance: Instance) -> bool:
+    """True when variables are stored but the configured KILN_ENCRYPTION_KEY can't decrypt them (they load as None).
+
+    Same check as the deployer's ENV_UNREADABLE guard; IS NOT NULL is evaluated without decrypting.
+    """
+    if instance.env is not None:
+        return False
+    return bool(await db.scalar(select(Instance.env.is_not(None)).where(Instance.id == instance.id)))
+
+
 def no_summaries() -> dict[uuid.UUID, dict[str, Any]]:
     return defaultdict(lambda: instance_summary([]))
 
@@ -251,7 +261,8 @@ async def overview(request: Request, db: DB, ctx: PageAuth) -> HTMLResponse:
     if can_hosts:
         steps.append(("Add a Docker host", bool(hosts), "/hosts"))
         steps.append(("Verify the host's SSH key", any(h.is_pinned for h in hosts), "/hosts"))
-    if can_instances:
+    # /instances/new needs instances:write; without instances:read the step could never be ticked off.
+    if can_instances and ctx.can(Perm.INSTANCES_WRITE):
         steps.append(("Create your first instance", bool(instances), "/instances/new"))
     stats = {
         "repos": len(repos),
@@ -383,7 +394,10 @@ async def instance_detail(request: Request, db: DB, ctx: PageAuth, instance_id: 
     deployments = (await db.scalars(
         select(Deployment).options(NO_LOG).where(Deployment.instance_id == instance.id).order_by(Deployment.created_at.desc()).limit(10)
     )).all() if ctx.can(Perm.DEPLOYMENTS_READ) else []
-    return await render(request, db, "instance_detail.html", ctx, instance=instance, deployments=deployments)
+    return await render(
+        request, db, "instance_detail.html", ctx, instance=instance, deployments=deployments,
+        env_unreadable=await env_unreadable(db, instance),
+    )
 
 
 @router.get("/instances/{instance_id}/edit")
@@ -400,9 +414,10 @@ async def edit_instance(request: Request, db: DB, ctx: PageAuth, instance_id: uu
         select(Deployment.id).where(Deployment.instance_id == instance.id, Deployment.started_at.is_not(None)).limit(1)
     )
     locked = instance.status != InstanceStatus.CREATED or started is not None
+    # An unreadable env renders as one blank row; PATCH keeps the stored values unless new ones are entered.
     return await render(
         request, db, "instance_form.html", ctx, instance=instance, env=instance.env or {},
-        selected_repo=instance.repository, locked=locked, **context,
+        env_unreadable=await env_unreadable(db, instance), selected_repo=instance.repository, locked=locked, **context,
     )
 
 
@@ -465,8 +480,12 @@ async def settings_users(request: Request, db: DB, ctx: PageAuth) -> HTMLRespons
     # users:write only reaches users whose every permission the viewer also holds (the API enforces this).
     mine = ctx.user.permissions
     manageable = {u.id for u in users if all(has_permission(mine, p) for p in u.permissions)}
+    # Likewise you can only grant a role whose every permission you hold.
+    grantable = {r.name for r in roles if all(has_permission(mine, p) for p in r.permissions)}
+    new_user_roles = next(([name] for name in ("viewer", get_settings().default_role) if name in grantable), [])
     return await render(
-        request, db, "settings/users.html", ctx, tab="users", users=users, roles=roles, manageable=manageable
+        request, db, "settings/users.html", ctx, tab="users", users=users, roles=roles, manageable=manageable,
+        grantable=grantable, new_user_roles=new_user_roles,
     )
 
 
@@ -474,9 +493,10 @@ async def settings_users(request: Request, db: DB, ctx: PageAuth) -> HTMLRespons
 async def settings_roles(request: Request, db: DB, ctx: PageAuth) -> HTMLResponse:
     need(ctx, Perm.ROLES_READ)
     roles = (await db.scalars(select(Role).order_by(Role.is_system.desc(), Role.name))).all()
+    choices = permission_choices()
     return await render(
         request, db, "settings/roles.html", ctx, tab="roles", roles=roles, catalog=PERMISSION_DESCRIPTIONS,
-        choices=permission_choices(),
+        choices=choices, grantable={p for p in choices if has_permission(ctx.user.permissions, p)},
     )
 
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from kiln.api.deps import DB, Auth
@@ -20,7 +18,6 @@ from kiln.core.ratelimit import (
     register_limiter,
 )
 from kiln.core.security import hash_password_async, verify_password_async
-from kiln.db.base import utcnow
 from kiln.models import UserSession
 from kiln.schemas import LoginIn, PasswordChange, ProfileUpdate, RegisterIn, SessionOut, UserOut
 from kiln.services import audit
@@ -32,14 +29,14 @@ from kiln.services.auth import (
     create_session,
     revoke_user_sessions,
     set_session_cookie,
+    sign_in_again,
+    signed_in_recently,
 )
-from kiln.services.users import UserError, check_password_strength, create_user
+from kiln.services.users import FIRST_ADMIN_RESERVED, UserError, check_password_strength, create_user, user_count
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 TOO_MANY = "Too many attempts; try again in a few minutes"
-# Setting a first password on a GitHub-only account needs a sign-in this recent.
-FIRST_PASSWORD_MAX_SESSION_AGE = timedelta(minutes=15)
 
 
 def _require_session(ctx: AuthContext) -> UserSession:
@@ -84,12 +81,21 @@ async def logout(ctx: Auth, response: Response, db: DB) -> None:
 
 @router.post("/register", status_code=201)
 async def register(body: RegisterIn, request: Request, response: Response, db: DB) -> SessionOut:
-    if not get_settings().allow_signup:
+    settings = get_settings()
+    if not settings.allow_signup:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Self-registration is disabled; ask an admin for an account")
     if not register_limiter.acquire(ip_bucket(client_ip(request))):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, TOO_MANY)
+    if settings.admin_email:
+        # KILN_ADMIN_EMAIL reserves the first (admin) account for the configured admin.
+        if await user_count(db) == 0:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, FIRST_ADMIN_RESERVED)
+        await db.commit()  # hand the pooled connection back before create_user queues for argon2
     try:
-        user = await create_user(db, email=body.email, password=body.password, full_name=body.full_name)
+        user = await create_user(
+            db, email=body.email, password=body.password, full_name=body.full_name,
+            allow_first_admin=not settings.admin_email,
+        )
     except UserError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     raw, session = await create_session(db, user, request)
@@ -133,10 +139,8 @@ async def change_password(body: PasswordChange, ctx: Auth, request: Request, db:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
         for limiter, key in attempt:
             limiter.reset(key)
-    elif utcnow() - session.created_at > FIRST_PASSWORD_MAX_SESSION_AGE:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Sign out and sign in again, then set your password within 15 minutes"
-        )
+    elif not signed_in_recently(session):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, sign_in_again("set your password"))
     user.password_hash = await hash_password_async(body.new_password)
     await revoke_user_sessions(db, user, keep=session)
     audit.record(db, "auth.password_changed", actor=user, target=user, request=request)
@@ -145,12 +149,15 @@ async def change_password(body: PasswordChange, ctx: Auth, request: Request, db:
 
 @router.delete("/me/github", status_code=204)
 async def unlink_github(ctx: Auth, request: Request, db: DB) -> None:
-    _require_session(ctx)
+    session = _require_session(ctx)
     account = ctx.user.github
     if account is None:
         return
     if ctx.user.password_hash is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Set a password before unlinking GitHub, or you'll be locked out")
+    # A stolen session must not swap the owner's GitHub link for the thief's (unlink, then link another).
+    if not signed_in_recently(session):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, sign_in_again("unlink GitHub"))
     ctx.user.oauth_accounts.remove(account)
     audit.record(db, "auth.github_unlinked", actor=ctx.user, target=ctx.user, summary=f"Unlinked @{account.login}", request=request)
     await db.commit()

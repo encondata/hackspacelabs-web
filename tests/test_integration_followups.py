@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 import uuid
 
+import pytest
+
 from sqlalchemy import select, update
 
 from kiln.api.v1 import users as users_api
@@ -144,3 +146,64 @@ async def test_list_pages_render_without_loading_build_logs(admin_client):
         await db.commit()
     for url in ("/", "/deployments", f"/instances/{inst_id}", "/api/v1/deployments"):
         assert (await admin_client.get(url)).status_code == 200, url
+
+
+# ---------------------------------------------------------- second review round follow-ups
+
+from kiln import cli  # noqa: E402
+from kiln.api.v1.instances import env_unreadable  # noqa: E402
+from kiln.models.repository import DEFAULT_BRANCH_TOO_LONG  # noqa: E402
+from tests.test_review_ops import K1, K2, _store_secrets  # noqa: E402
+
+
+@pytest.fixture
+def key_env():
+    """Switch KILN_ENCRYPTION_KEY for one test, rebuilding the cached settings and keys."""
+    import os
+
+    from kiln.core.config import get_settings
+    from kiln.core.crypto import reset_crypto_cache
+
+    saved = os.environ.get("KILN_ENCRYPTION_KEY")
+
+    def apply(key: str) -> None:
+        os.environ["KILN_ENCRYPTION_KEY"] = key
+        get_settings.cache_clear()
+        reset_crypto_cache()
+
+    yield apply
+    if saved is None:
+        os.environ.pop("KILN_ENCRYPTION_KEY", None)
+    else:
+        os.environ["KILN_ENCRYPTION_KEY"] = saved
+    get_settings.cache_clear()
+    reset_crypto_cache()
+
+
+async def test_clearing_unreadable_env_keeps_the_deploy_guard(key_env):
+    key_env(K1)
+    await _store_secrets()
+    key_env(K2)  # the old key is lost
+    async with get_sessionmaker()() as db:
+        await cli._rotate_secrets(db, clear_unreadable=True)
+        await db.commit()
+    async with get_sessionmaker()() as db:
+        instance = await db.scalar(select(Instance))
+        # Still flagged as needing re-entry (the deployer refuses), rather than silently empty.
+        assert instance.env is None and await env_unreadable(db, instance)
+
+
+async def test_new_instance_form_makes_you_pick_a_branch_when_the_default_is_unusable(admin_client):
+    async with get_sessionmaker()() as db:
+        repo = Repository(github_id=9, full_name="acme/long", owner="acme", name="long", html_url="https://github.com/acme/long",
+                          default_branch="main",
+                          detected_config={"dockerfile": True, "compose_file": None, "files": ["Dockerfile"],
+                                           DEFAULT_BRANCH_TOO_LONG: True})
+        db.add(repo)
+        await db.commit()
+        repo_id = repo.id
+    await admin_client.post("/api/v1/hosts", json={"name": "h1", "hostname": "10.0.0.5", "username": "deploy"})
+    page = (await admin_client.get(f"/instances/new?repo={repo_id}")).text
+    assert f'<option value="{repo_id}" data-default=""' in page
+    branch = re.search(r'<select[^>]*id="branch-select".*?</select>', page, re.S).group(0)
+    assert "required" in branch and "Choose a branch" in branch and ">main<" not in branch

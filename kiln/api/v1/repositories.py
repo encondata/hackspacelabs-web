@@ -5,14 +5,15 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import or_, select
 
 from kiln.api.deps import DB, not_found, require
 from kiln.core.permissions import Perm
 from kiln.db.base import utcnow
 from kiln.models import Repository
-from kiln.schemas import RepoOut, SyncOut
+from kiln.models.repository import DEFAULT_BRANCH_TOO_LONG
+from kiln.schemas import BRANCH_MAX, RepoOut, SyncOut
 from kiln.services import audit
 from kiln.services.auth import AuthContext
 from kiln.services.github import GitHubClient, GitHubError
@@ -77,6 +78,8 @@ async def branches(repo_id: uuid.UUID, ctx: Reader, db: DB) -> list[str]:
             names = await gh.list_branches(repo.github_id)
     except GitHubError as exc:
         raise _gh_error(exc) from exc
+    if not repo.default_branch_usable:  # default_branch is then a stale value or a placeholder: don't promote it
+        return sorted(names)
     # Default branch first.
     return sorted(names, key=lambda n: (n != repo.default_branch, n))
 
@@ -93,14 +96,22 @@ async def readme(repo_id: uuid.UUID, ctx: Reader, db: DB) -> dict[str, str | Non
 
 
 @router.post("/{repo_id}/detect")
-async def detect(repo_id: uuid.UUID, ctx: Syncer, db: DB, branch: str | None = None) -> RepoOut:
+async def detect(
+    repo_id: uuid.UUID, ctx: Syncer, db: DB, branch: Annotated[str | None, Query(max_length=BRANCH_MAX)] = None
+) -> RepoOut:
     repo = await _get(db, repo_id)
+    if not branch and not repo.default_branch_usable:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This repository's default branch could not be stored; specify a branch"
+        )
     token, _ = github_token_for(ctx.user)
     try:
         async with GitHubClient(token) as gh:
             config = await gh.detect_config(repo.github_id, branch or repo.default_branch)
     except GitHubError as exc:
         raise _gh_error(exc) from exc
+    if not repo.default_branch_usable:  # still true after detecting another branch
+        config = {**config, DEFAULT_BRANCH_TOO_LONG: True}
     repo.detected_config = config
     repo.detected_at = utcnow()
     await db.commit()

@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Sequence
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from kiln.api.deps import DB, Auth, not_found, require
 from kiln.core.permissions import Perm
 from kiln.models import Deployment, DeploymentStatus, Host, Instance, InstanceStatus, Repository, User
-from kiln.schemas import ActionOut, DeploymentOut, InstanceCreate, InstanceOut, InstanceUpdate
+from kiln.schemas import BRANCH_MAX, ActionOut, DeploymentOut, InstanceCreate, InstanceOut, InstanceUpdate
 from kiln.services import audit, deployer, ssh
 from kiln.services.auth import AuthContext
 
@@ -28,6 +30,11 @@ LogReader = Annotated[AuthContext, require(Perm.INSTANCES_READ, Perm.LOGS_READ)]
 # Settings that decide where and how an instance runs; fixed once anything was deployed.
 _PLACEMENT_FIELDS = ("host_id", "build_source", "compose_file", "dockerfile_path", "build_context")
 IN_PROGRESS = "A deployment is in progress for this instance; wait for it to finish"
+ENV_UNREADABLE = (
+    "The stored environment variables can't be decrypted with the configured KILN_ENCRYPTION_KEY. "
+    "Add the old key after the new one (comma-separated) and run `kiln rotate-encryption-key` to recover them, "
+    "or re-enter them on the instance, or clear them"
+)
 
 
 async def _get(db: DB, instance_id: uuid.UUID) -> Instance:
@@ -35,6 +42,28 @@ async def _get(db: DB, instance_id: uuid.UUID) -> Instance:
     if instance is None:
         raise not_found("Instance")
     return instance
+
+
+async def env_unreadable(db: AsyncSession, instance: Instance) -> bool:
+    """True when variables are stored but can't be decrypted: they load as None while the column is set.
+
+    The same test as ``deployer._start``; ``IS NOT NULL`` does not decrypt anything.
+    """
+    if instance.env is not None:
+        return False
+    return bool(await db.scalar(select(Instance.env.is_not(None)).where(Instance.id == instance.id)))
+
+
+async def unreadable_env_ids(db: AsyncSession, instances: Sequence[Instance]) -> set[uuid.UUID]:
+    """``env_unreadable`` for many instances in one query."""
+    ids = [i.id for i in instances if i.env is None]
+    if not ids:
+        return set()
+    return set((await db.scalars(select(Instance.id).where(Instance.id.in_(ids), Instance.env.is_not(None)))).all())
+
+
+async def instance_out(db: AsyncSession, instance: Instance) -> InstanceOut:
+    return InstanceOut.of(instance, env_unreadable=await env_unreadable(db, instance))
 
 
 async def _active_deployment(db: DB, instance_id: uuid.UUID) -> uuid.UUID | None:
@@ -85,7 +114,9 @@ async def list_instances(ctx: Reader, db: DB, host_id: uuid.UUID | None = None, 
         stmt = stmt.where(Instance.host_id == host_id)
     if repository_id:
         stmt = stmt.where(Instance.repository_id == repository_id)
-    return [InstanceOut.of(i) for i in (await db.scalars(stmt)).all()]
+    instances = (await db.scalars(stmt)).all()
+    unreadable = await unreadable_env_ids(db, instances)
+    return [InstanceOut.of(i, env_unreadable=i.id in unreadable) for i in instances]
 
 
 @router.post("", status_code=201)
@@ -102,6 +133,12 @@ async def create_instance(body: InstanceCreate, ctx: Writer, request: Request, d
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     if await db.scalar(select(Instance).where(Instance.slug == slug)):
         raise HTTPException(status.HTTP_409_CONFLICT, f"An instance named '{slug}' already exists")
+    if not body.branch and not repo.default_branch_usable:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Kiln could not store the default branch of {repo.full_name} (its name is longer than "
+            f"{BRANCH_MAX} characters); specify a branch",
+        )
 
     instance = Instance(
         name=body.name.strip(),
@@ -129,18 +166,24 @@ async def create_instance(body: InstanceCreate, ctx: Writer, request: Request, d
     await db.commit()
     if dep is not None:
         deployer.runner.submit(dep.id, instance.id)
-    return InstanceOut.of(instance)
+    return InstanceOut.of(instance)  # a new instance's env was just set, so it is readable
 
 
 @router.get("/{instance_id}")
 async def get_instance(instance_id: uuid.UUID, ctx: Reader, db: DB) -> InstanceOut:
-    return InstanceOut.of(await _get(db, instance_id))
+    return await instance_out(db, await _get(db, instance_id))
 
 
 @router.get("/{instance_id}/env")
 async def get_env(instance_id: uuid.UUID, ctx: Writer, db: DB) -> dict[str, str]:
-    """Environment variable values are only visible to people who can edit the instance."""
-    return (await _get(db, instance_id)).env or {}
+    """Environment variable values are only visible to people who can edit the instance.
+
+    Answers 409 when the stored values can't be decrypted, so a read-modify-write can't erase them.
+    """
+    instance = await _get(db, instance_id)
+    if await env_unreadable(db, instance):
+        raise HTTPException(status.HTTP_409_CONFLICT, ENV_UNREADABLE)
+    return instance.env or {}
 
 
 @router.patch("/{instance_id}")
@@ -168,25 +211,36 @@ async def update_instance(instance_id: uuid.UUID, body: InstanceUpdate, ctx: Wri
 async def _apply_update(
     db: DB, instance: Instance, body: InstanceUpdate, data: dict[str, Any], ctx: AuthContext, request: Request
 ) -> InstanceOut:
+    unreadable = await env_unreadable(db, instance)
     if data.get("host_id") is not None and data["host_id"] != instance.host_id:
         host = await db.get(Host, data["host_id"])
         if host is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown host")
         instance.host = host
-    for field in ("name", "branch", "build_source", "dockerfile_path", "build_context", "compose_file", "env"):
+    for field in ("name", "branch", "build_source", "dockerfile_path", "build_context", "compose_file"):
         if data.get(field) is not None:
             setattr(instance, field, data[field])
     if body.ports is not None:
         instance.ports = [p.model_dump() for p in body.ports]
     if body.volumes is not None:
         instance.volumes = [v.model_dump() for v in body.volumes]
-    changed = sorted(k for k in data if k != "env") + (["env"] if "env" in data else [])
+    changed = sorted(k for k in data if k not in ("env", "clear_env"))
+    # Stored values that can't be decrypted are kept, since the old key may still recover them, and the
+    # deploy guard keeps refusing to run without them. Only re-entered variables (a non-empty env) or
+    # clear_env replace them; an empty env, which is what saving the edit form sends, does not.
+    replaced = body.clear_env or bool(body.env) or (body.env is not None and not unreadable)
+    if replaced:
+        instance.env = body.env or {}  # clear_env on purpose also erases values that can't be decrypted
+        changed.append("env (cleared)" if body.clear_env and not body.env else "env")
+    details = None
+    if unreadable and (body.env is not None or body.clear_env):
+        details = {"env_unreadable": True, "env_replaced": replaced}
     audit.record(
-        db, "instance.update", actor=ctx.user, target=instance,
+        db, "instance.update", actor=ctx.user, target=instance, details=details,
         summary=f"Updated {instance.name}: {', '.join(changed) or 'no changes'}", request=request,
     )
     await db.commit()
-    return InstanceOut.of(instance)
+    return await instance_out(db, instance)
 
 
 @router.delete("/{instance_id}", status_code=204)

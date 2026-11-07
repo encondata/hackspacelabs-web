@@ -7,12 +7,16 @@ Rules for an unknown GitHub identity signing in:
   one of its orgs is allow-listed (``KILN_GITHUB_ALLOWED_USERS`` / ``_ORGS``, by name or as
   ``id:<number>``), or no allowlist is set and Kiln has no users yet (the first account
   becomes admin).
+* While ``KILN_ADMIN_EMAIL`` is set and Kiln has no users, nobody can create the first account
+  here: that seat belongs to the configured admin (``?error=config``).
 * GitHub is never auto-linked to an existing account by email: sign in with your password
   and link GitHub from Settings instead. This prevents account takeover via email reuse.
 
 The state cookie is signed with ``KILN_SECRET_KEY``, and a link request's state carries an
 HMAC of the session that started it, so a planted cookie cannot link GitHub to another
-account. Failures redirect with ``?error=<code>`` (plus ``&login=<github login>`` for some).
+account. Linking needs a recent sign-in, like setting a first password, so a stolen session
+cookie cannot add a GitHub login that outlives it (an older session gets a 403 page saying to
+sign in again). Failures redirect with ``?error=<code>`` (plus ``&login=<github login>`` for some).
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
@@ -36,7 +40,7 @@ from kiln.api.deps import DB, OptionalAuth
 from kiln.core.config import get_settings
 from kiln.models import OAuthAccount, User, UserSession
 from kiln.services import audit
-from kiln.services.auth import create_session, set_session_cookie
+from kiln.services.auth import create_session, set_session_cookie, sign_in_again, signed_in_recently
 from kiln.services.github import GitHubClient, GitHubError, authorize_url, exchange_code
 from kiln.services.users import UserError, create_user, get_user_by_email, user_count
 
@@ -121,9 +125,18 @@ async def github_login(next: str = "/") -> RedirectResponse:
 
 
 @router.get("/link")
-async def github_link(ctx: OptionalAuth) -> RedirectResponse:
+async def github_link(request: Request, db: DB, ctx: OptionalAuth) -> Response:
     if ctx is None or ctx.session is None:
         return RedirectResponse("/login?next=/settings", status_code=302)
+    # Adding (or re-authorizing) a GitHub login is a credential change: it needs a recent sign-in.
+    if (ctx.user.password_hash or ctx.user.github) and not signed_in_recently(ctx.session):
+        from kiln.web.pages import render  # pages imports this module, so not at the top
+
+        action = "re-authorize GitHub" if ctx.user.github else "link GitHub"
+        return await render(
+            request, db, "error.html", ctx, status_code=403, code=403, heading="Sign in again to continue",
+            message=f"{sign_in_again(action)}.",
+        )
     return _start("link", "/settings", ctx.session)
 
 
@@ -147,8 +160,9 @@ async def _signup_allowed(db: DB, gh: GitHubClient, profile: dict[str, Any]) -> 
                 raise
             return False
         return any(_allowlisted(orgs, org) for org in memberships)
-    # Only with no allowlist configured may anyone claim the first (admin) account.
-    return not users and await user_count(db) == 0
+    # Only with no allowlist configured, and no KILN_ADMIN_EMAIL reserving it, may anyone claim the
+    # first (admin) account.
+    return not users and not settings.admin_email and await user_count(db) == 0
 
 
 @router.get("/callback")
@@ -204,6 +218,15 @@ async def github_callback(
                     return _fail("deactivated")
 
             else:
+                admin_email = get_settings().admin_email
+                if admin_email and await user_count(db) == 0:
+                    log.error(
+                        "GitHub sign-up for @%s refused: KILN_ADMIN_EMAIL reserves the first account, but that "
+                        "admin was not created (see the startup log). Fix KILN_ADMIN_PASSWORD and restart, "
+                        "or run `kiln create-admin`.",
+                        login,
+                    )
+                    return _fail("config")
                 if not await _signup_allowed(db, gh, profile):
                     return _fail("not_allowed", login=login)
                 email, verified = await gh.get_primary_email()
@@ -214,7 +237,8 @@ async def github_callback(
                     return _fail("email_in_use")
                 try:
                     user = await create_user(
-                        db, email=email, full_name=(profile.get("name") or login)[:200], avatar_url=_avatar(profile)
+                        db, email=email, full_name=(profile.get("name") or login)[:200], avatar_url=_avatar(profile),
+                        allow_first_admin=not admin_email,
                     )
                 except UserError as exc:
                     log.error("GitHub sign-up for @%s failed: %s", login, exc)

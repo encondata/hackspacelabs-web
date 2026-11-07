@@ -387,13 +387,19 @@
     const target = $(repoSelect.dataset.branches);
     if (!target) return;
     const opt = repoSelect.selectedOptions[0];
-    const current = target.dataset.current || (opt && opt.dataset.default) || "main";
-    target.innerHTML = `<option>${esc(current)}</option>`;
+    // An empty default means the repository's default branch can't be used: make the user pick one.
+    const current = target.dataset.current || (opt && opt.dataset.default) || "";
+    const placeholder = '<option value="" selected disabled>Choose a branch</option>';
+    target.innerHTML = current ? `<option>${esc(current)}</option>` : placeholder;
     if (!repoSelect.value) return;
     try {
       const names = await api("GET", `/api/v1/repositories/${repoSelect.value}/branches`);
-      const list = names.includes(current) ? names : [current, ...names];
-      target.innerHTML = list.map((n) => `<option ${n === current ? "selected" : ""}>${esc(n)}</option>`).join("");
+      if (current) {
+        const list = names.includes(current) ? names : [current, ...names];
+        target.innerHTML = list.map((n) => `<option ${n === current ? "selected" : ""}>${esc(n)}</option>`).join("");
+      } else {
+        target.innerHTML = placeholder + names.map((n) => `<option>${esc(n)}</option>`).join("");
+      }
     } catch (err) {
       target.title = err.message; // keep the default branch so the form still works
     }
@@ -419,15 +425,21 @@
 
   // ------------------------------------------------ instance form preview
   function wirePreview(form) {
+    // Fields that are fixed once deployed are disabled, and serialize() leaves those out (so they stay out of the
+    // PATCH body); the preview reads them from the page instead.
+    const field = (name) => $(`[name="${name}"]`, form);
     const update = () => {
       const data = serialize(form);
-      const repo = $('[name="repository_id"]', form);
+      const repo = field("repository_id");
       const host = $('[name="host_id"]:checked', form);
+      const source = $('[name="build_source"]:checked', form);
+      const dockerfile = field("dockerfile_path"), composeFile = field("compose_file");
       const set = (key, value) => $$(`[data-preview="${key}"]`).forEach((n) => { n.textContent = value || "—"; });
-      const compose = data.build_source === "compose";
+      const compose = (source && source.value) === "compose";
       set("repository", repo && repo.selectedOptions[0] ? repo.selectedOptions[0].textContent.trim() : "");
       set("branch", data.branch);
-      set("source", compose ? `docker compose (${data.compose_file || "docker-compose.yml"})` : `Dockerfile (${data.dockerfile_path || "Dockerfile"})`);
+      set("source", compose ? `docker compose (${(composeFile && composeFile.value) || "docker-compose.yml"})`
+        : `Dockerfile (${(dockerfile && dockerfile.value) || "Dockerfile"})`);
       set("host", host ? host.dataset.label : "");
       set("name", data.name);
       set("env", Object.keys(data.env || {}).length + " variable(s)");

@@ -16,13 +16,13 @@
 
 <section class="card">
   {% if deployments %}
-  {% set can_hosts, can_repos = auth.can(Perm.HOSTS_READ), auth.can(Perm.REPOS_READ) %}
+  {% set can_hosts, can_repos, can_instances = auth.can(Perm.HOSTS_READ), auth.can(Perm.REPOS_READ), auth.can(Perm.INSTANCES_READ) %}
   <div class="table-wrap"><table class="table">
     <thead><tr><th>Instance</th><th>Status</th><th>Commit</th>{% if can_hosts %}<th>Host</th>{% endif %}<th>Triggered by</th><th>Started</th><th>Duration</th><th></th></tr></thead>
     <tbody>
     {% for d in deployments %}
       <tr>
-        <td><a href="/instances/{{ d.instance.id }}"><strong>{{ d.instance.name }}</strong></a>{% if can_repos %}<div class="subtle">{{ d.instance.repository.full_name }}</div>{% endif %}</td>
+        <td>{% if can_instances %}<a href="/instances/{{ d.instance.id }}"><strong>{{ d.instance.name }}</strong></a>{% else %}<strong>{{ d.instance.name }}</strong>{% endif %}{% if can_repos %}<div class="subtle">{{ d.instance.repository.full_name }}</div>{% endif %}</td>
         <td>{{ badge("deployment", d.status) }}</td>
         <td><span class="chip">{{ icon("branch", "i-sm") }} {{ d.branch }}</span> <span class="mono subtle">{{ d.short_sha }}</span><div class="subtle truncate" style="max-width: 300px">{{ d.commit_message or "" }}</div></td>
         {% if can_hosts %}<td class="muted">{{ d.instance.host.name }}</td>{% endif %}

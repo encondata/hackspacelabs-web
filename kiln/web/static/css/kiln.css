@@ -415,6 +415,8 @@ textarea.input { height: auto; min-height: 110px; padding: 10px 12px; font-famil
   border-color: var(--primary); background: var(--primary-soft);
   box-shadow: 0 0 0 1px var(--primary);
 }
+.choice:has(input:disabled) { cursor: not-allowed; }
+.choice:has(input:disabled:not(:checked)) { opacity: .6; }
 .choice input { margin-top: 3px; accent-color: var(--primary); }
 .choice strong { display: block; }
 .choice small { color: var(--text-muted); font-size: 12.5px; display: block; }

@@ -2,14 +2,15 @@
 {% from "_macros.html" import icon, badge %}
 {% block title %}Deployment {{ dep.short_sha or dep.id|string|truncate(8, True, "") }}{% endblock %}
 {% block content %}
+{% set can_instances = auth.can(Perm.INSTANCES_READ) %}
 <div class="page-head">
   <div>
-    <div class="breadcrumb"><a href="/deployments">Deployments</a>{{ icon("chevron-right", "i-sm") }}<a href="/instances/{{ dep.instance.id }}">{{ dep.instance.name }}</a></div>
+    <div class="breadcrumb"><a href="/deployments">Deployments</a>{{ icon("chevron-right", "i-sm") }}{% if can_instances %}<a href="/instances/{{ dep.instance.id }}">{{ dep.instance.name }}</a>{% else %}<span>{{ dep.instance.name }}</span>{% endif %}</div>
     <h1 class="row">{{ dep.instance.name }} {{ badge("deployment", dep.status) }}</h1>
     <p class="lede">{% if auth.can(Perm.REPOS_READ) %}{{ dep.instance.repository.full_name }} · {% endif %}<span class="mono">{{ dep.branch }}</span>{% if auth.can(Perm.HOSTS_READ) %} → {{ dep.instance.host.name }}{% endif %}</p>
   </div>
   <div class="actions">
-    <a class="btn" href="/instances/{{ dep.instance.id }}">{{ icon("box") }} Open instance</a>
+    {% if can_instances %}<a class="btn" href="/instances/{{ dep.instance.id }}">{{ icon("box") }} Open instance</a>{% endif %}
     {% if auth.can(Perm.DEPLOYMENTS_CREATE) and not dep.is_active %}
     <button class="btn btn-primary" data-api="POST /api/v1/instances/{{ dep.instance.id }}/deploy" data-then="redirect:/deployments/{id}">{{ icon("restart") }} Redeploy</button>
     {% endif %}

@@ -16,8 +16,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Text, column, select, table
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import Scope
 
 from kiln import __version__
 from kiln.api.v1 import api_router
@@ -38,6 +40,26 @@ CSP = (
     "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; "
     "frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://github.com"
 )
+NUL_IN_URL = "The URL contains a NUL character"
+# SQLSTATEs PostgreSQL uses for text it cannot store: NUL in a text value (22021), \u0000 in jsonb (22P05).
+UNSTORABLE_TEXT = frozenset({"22021", "22P05"})
+
+
+def has_nul(scope: Scope) -> bool:
+    """NUL in the path or query string, raw or percent-encoded (PostgreSQL rejects it in any text value)."""
+    raw = scope.get("raw_path") or b""
+    query = scope.get("query_string") or b""
+    return "\x00" in scope.get("path", "") or any(b"%00" in part.lower() or b"\x00" in part for part in (raw, query))
+
+
+def sqlstate(exc: DBAPIError) -> str | None:
+    """The SQLSTATE of a database error, from the DBAPI exception or the driver error behind it."""
+    orig = exc.orig
+    for err in (orig, getattr(orig, "__cause__", None)):
+        code = getattr(err, "sqlstate", None) or getattr(err, "pgcode", None)
+        if code:
+            return str(code)
+    return None
 
 
 async def check_encryption_key(db: AsyncSession) -> bool:
@@ -93,6 +115,13 @@ def create_app() -> FastAPI:
         openapi_url="/api/openapi.json",
     )
 
+    # Added before security_headers, so that middleware (the outer one) adds headers to this 400 too.
+    @app.middleware("http")
+    async def reject_nul(request: Request, call_next):  # type: ignore[no-untyped-def]
+        if has_nul(request.scope):
+            return JSONResponse({"detail": NUL_IN_URL}, status_code=400)
+        return await call_next(request)
+
     @app.middleware("http")
     async def security_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
         response: Response = await call_next(request)
@@ -132,6 +161,14 @@ def create_app() -> FastAPI:
             async with get_sessionmaker()() as db:
                 return await pages.not_found_page(request, db, getattr(request.state, "auth", None))
         return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
+
+    @app.exception_handler(DBAPIError)
+    async def database_error(request: Request, exc: DBAPIError) -> Response:
+        # Backstop for text that reaches PostgreSQL without passing a request model (asyncpg reports
+        # it as a plain DBAPIError). Every other database error stays a 500.
+        if sqlstate(exc) in UNSTORABLE_TEXT:
+            return JSONResponse({"detail": "Input contains characters the database cannot store"}, status_code=400)
+        raise exc
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.include_router(api_router, prefix="/api/v1")

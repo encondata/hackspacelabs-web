@@ -34,11 +34,12 @@
 </section>
 
 {# Every stored permission gets a box (wildcards and unknown values included), so saving never drops one silently.
-   The edit form only sends permissions when a box changed (data-omit-unchanged). #}
+   The edit form only sends permissions when a box changed (data-omit-unchanged). A permission you can't grant is
+   disabled only while unchecked: serialize() leaves disabled boxes out, so a disabled checked one would be removed. #}
 {% macro perm_boxes(selected) -%}
 <div class="choice-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); max-height: 46vh; overflow: auto; padding: 2px">
-  {% for name, desc in choices.items() %}
-  <label class="choice"><input type="checkbox" name="permissions" value="{{ name }}" data-array {{ 'checked' if name in selected }}><span><strong class="mono" style="font-size: 12.5px">{{ name }}</strong><small>{{ desc }}</small></span></label>
+  {% for name, desc in choices.items() %}{% set locked = name not in grantable and name not in selected %}
+  <label class="choice"><input type="checkbox" name="permissions" value="{{ name }}" data-array {{ 'checked' if name in selected }} {{ 'disabled' if locked }}><span><strong class="mono" style="font-size: 12.5px">{{ name }}</strong><small>{{ desc }}</small>{% if locked %}<small>You don't hold this, so you can't grant it.</small>{% endif %}</span></label>
   {% endfor %}
   {% for name in selected if name not in choices %}
   <label class="choice"><input type="checkbox" name="permissions" value="{{ name }}" data-array checked><span><strong class="mono" style="font-size: 12.5px">{{ name }}</strong><small>Unknown permission. Uncheck it before you change this role's permissions.</small></span></label>

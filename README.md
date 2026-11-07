@@ -48,17 +48,22 @@ publish Kiln on loopback only (`"127.0.0.1:${KILN_PORT:-8000}:8000"` in docker-c
 
 **First admin:** whichever comes first becomes admin:
 - `KILN_ADMIN_EMAIL`/`KILN_ADMIN_PASSWORD` on an empty database. The password must be at least 10
-  characters; if it is too short Kiln logs an error at startup and does not create the admin.
+  characters. While `KILN_ADMIN_EMAIL` is set and Kiln has no accounts, the first account is reserved for it:
+  GitHub sign-in and self-registration cannot create it. So if the password is missing or too short, Kiln
+  logs an error, the login page says the configured admin was not created, and nobody can claim the seat
+  until you fix the password and restart, or run `kiln create-admin`.
 - `docker compose exec kiln kiln create-admin you@example.com` (see below).
-- The first person to sign in with GitHub. When `KILN_GITHUB_ALLOWED_USERS` or `KILN_GITHUB_ALLOWED_ORGS`
-  is set, only an allow-listed GitHub account can claim this. With neither set, anyone who reaches Kiln
-  first can, so on an internet-facing install set an allowlist or use one of the options above.
+- The first person to sign in with GitHub, only when `KILN_ADMIN_EMAIL` is unset. When
+  `KILN_GITHUB_ALLOWED_USERS` or `KILN_GITHUB_ALLOWED_ORGS` is set, only an allow-listed GitHub account can claim
+  this. With neither set, anyone who reaches Kiln first can, so on an internet-facing install set an allowlist
+  or use one of the options above.
 
 `kiln create-admin EMAIL` creates a new admin and asks for a password. For an existing account it only
 grants the admin role and never changes the password; it prints the account's details (check any linked
 GitHub login before promoting an account you didn't create). Add `--reset-password` to set a new password,
-which also signs out the account's sessions and deletes its API tokens, and `--activate` to re-enable a
-deactivated account. To script it, pipe the password on stdin:
+which also signs out the account's sessions, deletes its API tokens and unlinks GitHub (the owner relinks it
+from Settings → Profile), and `--activate` to re-enable a deactivated account (an account with neither a
+password nor a GitHub link also needs `--reset-password`). To script it, pipe the password on stdin:
 `printf '%s\n' "$PW" | docker compose exec -T kiln kiln create-admin you@example.com`.
 
 ### GitHub OAuth app
@@ -74,11 +79,15 @@ deactivated account. To script it, pipe the password on stdin:
    **Settings → Users**, which pins their numeric id.
 
 Kiln never links GitHub to an existing account by matching email. Users link GitHub themselves
-from **Settings → Profile** after signing in.
+from **Settings → Profile** after signing in. Linking, re-authorizing and unlinking need a sign-in from the
+last 15 minutes. Admins can remove another user's link from **Settings → Users**
+(`DELETE /api/v1/users/{id}/github`) for users who have a password; for the others, resetting the password
+sets one and unlinks GitHub.
 
 ### Preparing a host
 
-Any Linux machine with Docker Engine + the compose plugin and SSH:
+Any Linux machine with Docker Engine 20.10 or later + the compose plugin and SSH. Kiln runs every remote
+command with `/bin/sh`, so the deploy user's login shell (bash, zsh, …) does not matter:
 
 1. **Hosts → Add Host**, keep *Generate key*.
 2. Kiln shows the public key and a ready-to-paste snippet that authorizes it, creates the deploy
@@ -88,7 +97,7 @@ Any Linux machine with Docker Engine + the compose plugin and SSH:
    different *type* of host key is also reported as a mismatch.
 
 Changing a host's hostname or port forgets its pinned key, so verify it again afterwards (the change is
-audited). The deploy root cannot change once any instance on the host has been deployed.
+audited). A check that was running while the address or key changed is discarded. The deploy root cannot change once any instance on the host has been deployed.
 
 On the host each instance lives in `<deploy_root>/<slug>/` with `releases/<sha12>-<deployment>`,
 `current → releases/…` and `shared/.env` (mode 600). Every deployment, even of the same commit, gets a
@@ -106,11 +115,24 @@ for you to remove by hand.
 followed by Kiln's values, so Kiln's values win and the repository's defaults stay. It is passed with
 `--env-file` to every compose command and linked as `.env` next to the compose file. Values are quoted so
 `$`, `#`, quotes and spaces arrive exactly as entered (they are not `${VAR}`-interpolated). A value that
-ends in a backslash and also needs quoting requires a recent Docker Compose release.
+ends in a backslash and also needs quoting requires a recent Docker Compose release. Values in the repository's `.env` that reference a variable Kiln overrides (for example
+`DATABASE_URL=postgres://app:${POSTGRES_PASSWORD}@db/app`) keep the repository's value when the compose file
+interpolates them with `${...}` (a service's `env_file: .env` does see Kiln's values), so set the derived
+variable in Kiln too.
 
 An instance's host and build settings (host, Dockerfile or compose, Dockerfile path, build context, compose
 file) can only change before its first deployment; after that, destroy it and create a new one. Deleting an
 instance, or changing these settings, is refused while a deployment is queued or running.
+
+Dockerfile path, build context and compose file must be relative paths inside the repository that don't
+start with `-`. Before uploading, Kiln checks the source archive and refuses the deployment if the build
+context, the Dockerfile, the compose file or any directory on the way to them is a symbolic or hard link
+(Docker would follow it out of the release directory); links elsewhere in the repository are fine. A
+Dockerfile build that leaves no local image fails before the running container is replaced, and Kiln never
+pulls the image it built (`docker run --pull=never`).
+
+Branch names can be up to 255 characters and are never shortened. If a repository's GitHub default branch is
+longer, Kiln skips build detection for it and asks you to choose a branch when you create an instance.
 
 ## Local development
 
@@ -171,11 +193,19 @@ changing a role's other permissions.
   key or password on the host page, env vars on the instance, GitHub by re-linking), or erase them with
   `kiln rotate-encryption-key --clear-unreadable`. In development the key is derived from `KILN_SECRET_KEY`,
   so changing that has the same effect.
+  An instance whose environment variables can't be decrypted says so on its page and in the API
+  (`env_unreadable: true`; `GET /api/v1/instances/{id}/env` answers 409), and its deployments are refused
+  until the variables are re-entered or cleared ("Clear stored variables" on the Configure form, or
+  `PATCH /api/v1/instances/{id}` with `{"clear_env": true}`). Saving the form without entering variables keeps
+  the unreadable values, so restoring the old key still recovers them; `--clear-unreadable` keeps that
+  deploy guard for instances.
 - Sessions are opaque random tokens (only a SHA-256 hash is stored) in an `HttpOnly`, `SameSite=Lax` cookie;
   cookie-authenticated writes must echo a per-session CSRF token. API tokens skip CSRF but cannot mint tokens,
-  change the password or unlink GitHub. Setting a first password on a GitHub-only account also needs a sign-in
+  change the password or unlink GitHub. Setting a first password on a GitHub-only account, linking or re-authorizing GitHub, and unlinking it also need a sign-in
   from the last 15 minutes.
-- An admin password reset or deactivation signs the user out everywhere and deletes their API tokens.
+- An admin password reset or deactivation signs the user out everywhere, deletes their API tokens and unlinks
+  GitHub; until they relink, deploys they trigger fall back to `KILN_GITHUB_SERVICE_TOKEN` or public repositories.
+  Reactivating an account with no password needs a new password in the same change.
   Changing your own password (Settings → Profile; `PATCH /api/v1/users/{your id}` refuses a password) signs
   out your other sessions but keeps your API tokens; revoke them under Settings → Tokens. Admins can list and
   revoke another user's tokens with `GET /api/v1/users/{id}/tokens` and `DELETE /api/v1/users/{id}/tokens/{token_id}`.
@@ -189,7 +219,9 @@ changing a role's other permissions.
   25 per user per 15 minutes (audited as `auth.password_change_failed`).
 - With `KILN_ALLOW_SIGNUP=true`, `/api/v1/auth/register` reveals whether an email already has an account
   (rate limited per IP); Kiln has no email verification yet.
-- Every remote command is built with `shlex.quote`, and paths and names are validated against traversal and injection.
+- Every remote command is built with `shlex.quote` and run with `/bin/sh` with stdin closed; paths and names are
+  validated against traversal and injection. Text containing NUL characters is refused (PostgreSQL can't store
+  it): request bodies get a 422 and URLs with `%00` a 400. Build output lines longer than 16 KiB are cut.
 - Strict CSP (`script-src 'self'`), `X-Frame-Options: DENY`, `nosniff`, HSTS when served over HTTPS.
   In production, SQL errors do not include bound parameter values. The `httpx`/`httpcore` loggers stay at
   WARNING even with `KILN_LOG_LEVEL=DEBUG`, because their request logs include short-lived GitHub download tokens.

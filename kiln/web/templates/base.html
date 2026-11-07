@@ -49,7 +49,7 @@
       </form>
       <div class="topbar-right">
         {% if user.github %}
-        <a class="pill" href="/repositories" title="Signed in to GitHub as @{{ user.github.login }}">
+        <a class="pill" href="{{ '/repositories' if auth.can(Perm.REPOS_READ) else '/settings' }}" title="Signed in to GitHub as @{{ user.github.login }}">
           {{ icon("github") }} GitHub
           <span class="meta"><span class="dot success"></span>{% if last_sync %}Synced {{ last_sync|timeago }}{% else %}Not synced yet{% endif %}</span>
         </a>

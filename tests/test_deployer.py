@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import tarfile
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,6 +17,33 @@ from kiln.services.github import CommitInfo
 from tests.conftest import make_user
 
 SHA = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0"
+ARCHIVE_TOP = "acme-web-a1b2c3d"
+
+
+def write_source_archive(dest: Path, files: dict[str, str] | None = None, *, dirs: tuple[str, ...] = (),
+                         symlinks: dict[str, str] | None = None, hardlinks: dict[str, str] | None = None) -> int:
+    """A GitHub-style source tarball: every member below one top-level directory. Returns its size."""
+    files = {"Dockerfile": "FROM node:22\n"} if files is None else files
+    with tarfile.open(dest, "w:gz") as tar:
+        tar.addfile(_member(ARCHIVE_TOP, tarfile.DIRTYPE))
+        for name in dirs:
+            tar.addfile(_member(f"{ARCHIVE_TOP}/{name}", tarfile.DIRTYPE))
+        for name, content in files.items():
+            data = content.encode()
+            info = _member(f"{ARCHIVE_TOP}/{name}", tarfile.REGTYPE)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        for kind, links in ((tarfile.SYMTYPE, symlinks or {}), (tarfile.LNKTYPE, hardlinks or {})):
+            for name, target in links.items():
+                tar.addfile(_member(f"{ARCHIVE_TOP}/{name}", kind, target))
+    return dest.stat().st_size
+
+
+def _member(name: str, kind: bytes, linkname: str = "") -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name)
+    info.type, info.linkname = kind, linkname
+    info.mode = 0o755 if kind == tarfile.DIRTYPE else 0o644
+    return info
 
 
 def test_validation_helpers():
@@ -53,8 +82,9 @@ def _instance(**kw) -> Instance:
 def test_dockerfile_commands_are_quoted():
     inst = _instance(dockerfile_path="docker/Dockerfile prod", build_context="src")
     build, rm, run = deployer.build_commands(inst, "/opt/kiln/web-prod/releases/a1b2c3d4e5f6", SHA)
-    assert "-f 'docker/Dockerfile prod'" in build and build.endswith(" src")
-    assert "kiln/web-prod:a1b2c3d4e5f6" in build
+    assert "-f 'docker/Dockerfile prod'" in build
+    assert build.endswith(" src && docker image inspect --format . kiln/web-prod:a1b2c3d4e5f6 >/dev/null")
+    assert "-t kiln/web-prod:a1b2c3d4e5f6" in build
     assert rm.startswith("docker ps -aq --filter label=kiln.instance=00000000-0000-0000-0000-000000000001")
     assert "-p 8080:3000/tcp" in run and "-v /var/lib/web:/data" in run
     assert "--env-file /opt/kiln/web-prod/shared/.env" in run
@@ -79,6 +109,7 @@ def test_compose_commands():
 
 class FakeGitHub:
     calls: list[str] = []
+    archive: bytes = b""  # the last tarball handed out
 
     def __init__(self, token):
         self.token = token
@@ -100,14 +131,15 @@ class FakeGitHub:
 
     async def download_tarball(self, repo_id, sha, dest: Path):
         FakeGitHub.calls.append(f"tarball {repo_id}@{sha}")
-        dest.write_bytes(b"fake-tarball")
-        return 12
+        size = write_source_archive(dest)
+        FakeGitHub.archive = dest.read_bytes()
+        return size
 
 
 class FakeRemote:
     def __init__(self, fail_on: str | None = None):
         self.commands: list[str] = []
-        self.files: dict[str, str] = {}
+        self.files: dict[str, str | bytes] = {}
         self.fail_on = fail_on
 
     async def run(self, command, *, check=True, on_line=None, timeout=None):
@@ -119,7 +151,7 @@ class FakeRemote:
         return 0, ""
 
     async def put(self, local, remote):
-        self.files[remote] = Path(local).read_text()
+        self.files[remote] = Path(local).read_bytes()
 
     async def write_text(self, remote, content, mode=0o600):
         self.files[remote] = content
@@ -162,7 +194,7 @@ async def test_successful_deployment():
         assert "Step 1/3" in dep.log and "Deployment succeeded" in dep.log
     release = f"/opt/kiln/web-prod/releases/a1b2c3d4e5f6-{dep_id.hex[:8]}"
     assert remote.files["/opt/kiln/web-prod/shared/.env"] == "NODE_ENV=production\n"
-    assert remote.files[f"/opt/kiln/web-prod/releases/.upload-{dep_id.hex}.tar.gz"] == "fake-tarball"
+    assert remote.files[f"/opt/kiln/web-prod/releases/.upload-{dep_id.hex}.tar.gz"] == FakeGitHub.archive
     assert any("docker build" in c for c in remote.commands)
     assert f"ln -sfn {release} /opt/kiln/web-prod/current" in remote.commands
     assert FakeGitHub.calls[-3:] == ["repo 42", "commit 42@main", f"tarball 42@{SHA}"]
@@ -178,7 +210,7 @@ async def test_failed_deployment_records_error():
         dep = await db.get(Deployment, dep_id)
         assert dep.status == "failed" and "build exploded" in dep.error
         assert dep.instance.status == "failed"
-        assert not any(c.startswith("docker run") for c in remote.commands)
+        assert not any(c.startswith("docker run -d") for c in remote.commands)
 
 
 async def test_recover_interrupted_marks_stale_deployments():

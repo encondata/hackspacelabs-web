@@ -7,7 +7,7 @@ import logging
 import uuid
 
 from fastapi import Request
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kiln.core.config import get_settings
@@ -56,6 +56,19 @@ async def check_host(
         return None
     if (current.hostname, current.port, current.host_key) != (target.hostname, target.port, target.pinned_host_key):
         return current
+    # Another request can still move the host or change its key between the read above and the write
+    # below. This compare-and-set UPDATE only matches while the row has the address and key that were
+    # probed, and it locks the row until the commit, so a concurrent edit waits for this check
+    # (PostgreSQL re-checks the condition after waiting for a concurrent writer's lock).
+    same_key = Host.host_key.is_(None) if target.pinned_host_key is None else Host.host_key == target.pinned_host_key
+    claimed = await db.execute(
+        update(Host)
+        .where(Host.id == host.id, Host.hostname == target.hostname, Host.port == target.port, same_key)
+        .values(last_checked_at=utcnow())
+    )
+    if claimed.rowcount != 1:  # moved, re-keyed or deleted meanwhile: discard the result
+        await db.commit()
+        return await db.get(Host, host.id, populate_existing=True)
     current.status = status
     current.last_error = ssh.clip(error, 2000) if error else None
     if result is not None:

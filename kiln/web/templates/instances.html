@@ -15,6 +15,9 @@
 
 <section class="card">
   {% if instances %}
+  {% set can_hosts = auth.can(Perm.HOSTS_READ) %}
+  {# Without deployments:read a deploy stays on this page instead of opening a deployment page that would be a 403. #}
+  {% set can_deployments = auth.can(Perm.DEPLOYMENTS_READ) %}
   <div class="table-wrap"><table class="table" id="instances-table">
     <thead><tr><th>Instance</th><th>Repository</th><th>Branch</th><th>Host</th><th>Build</th><th>Status</th><th>Last deploy</th><th class="num">Actions</th></tr></thead>
     <tbody>
@@ -23,13 +26,13 @@
         <td><a class="primary-cell" href="/instances/{{ i.id }}" style="color:inherit"><span class="row-icon">{{ icon("box") }}</span><span><strong>{{ i.name }}</strong><small class="mono">{{ i.slug }}</small></span></a></td>
         <td class="muted">{{ i.repository.full_name }}</td>
         <td><span class="chip">{{ icon("branch", "i-sm") }} {{ i.branch }}</span></td>
-        <td><a href="/hosts/{{ i.host.id }}">{{ i.host.name }}</a></td>
+        <td>{% if can_hosts %}<a href="/hosts/{{ i.host.id }}">{{ i.host.name }}</a>{% else %}{{ i.host.name }}{% endif %}</td>
         <td class="muted">{{ "Compose" if i.build_source == "compose" else "Dockerfile" }}</td>
         <td>{{ badge("instance", i.status) }}</td>
         <td class="muted nowrap">{{ i.last_deployed_at|timeago }}{% if i.current_commit_sha %}<div class="subtle mono">{{ i.current_commit_sha[:7] }}</div>{% endif %}</td>
         <td class="actions-cell">
           {% if auth.can(Perm.DEPLOYMENTS_CREATE) %}
-          <button class="btn btn-sm" data-api="POST /api/v1/instances/{{ i.id }}/deploy" data-then="redirect:/deployments/{id}" {{ 'disabled' if i.status == 'deploying' }}>{{ icon("rocket", "i-sm") }} Deploy</button>
+          <button class="btn btn-sm" data-api="POST /api/v1/instances/{{ i.id }}/deploy" {% if can_deployments %}data-then="redirect:/deployments/{id}"{% else %}data-then="reload" data-success="Deployment queued"{% endif %} {{ 'disabled' if i.status == 'deploying' }}>{{ icon("rocket", "i-sm") }} Deploy</button>
           {% endif %}
           <a class="btn btn-sm" href="/instances/{{ i.id }}">Open</a>
         </td>

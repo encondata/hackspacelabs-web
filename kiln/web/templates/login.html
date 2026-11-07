@@ -29,7 +29,15 @@
       <button class="btn btn-primary btn-lg btn-block" type="submit">Sign in</button>
     </form>
 
-    {% if no_users %}
+    {% if no_users and settings.admin_email %}
+    {# KILN_ADMIN_EMAIL reserves the first account, so GitHub sign-in and registration cannot claim it. #}
+    <div class="callout warning">{{ icon("alert") }}
+      <span>No accounts exist yet. <code>KILN_ADMIN_EMAIL</code> is set, but the configured admin was not created;
+        check the server log. Fix <code>KILN_ADMIN_PASSWORD</code> and restart, or run
+        <code>kiln create-admin you@example.com</code>. Until then nobody can create the first account here.
+      </span>
+    </div>
+    {% elif no_users %}
     <div class="callout primary">{{ icon("info") }}
       <span>No accounts exist yet. Create the first admin with
         <code>kiln create-admin you@example.com</code>, set <code>KILN_ADMIN_EMAIL</code> / <code>KILN_ADMIN_PASSWORD</code>,

@@ -89,7 +89,8 @@ async def create(body: UserCreate, ctx: Writer, request: Request, db: DB) -> Use
     try:
         # An empty roles list means no roles; create_user only fills in the default for None.
         user = await create_user(
-            db, email=str(body.email), password=body.password, full_name=body.full_name, role_names=body.roles
+            db, email=str(body.email), password=body.password, full_name=body.full_name, role_names=body.roles,
+            allow_first_admin=False,
         )
     except UserError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
@@ -131,6 +132,12 @@ async def update(user_id: uuid.UUID, body: UserUpdate, ctx: Writer, request: Req
             if not body.is_active:
                 await ensure_not_last_admin(db, user)
                 revoke = True
+            elif user.password_hash is None and user.github is None and password_hash is None:
+                # Deactivation unlinked GitHub, so a GitHub-only account would come back with no way in.
+                raise UserError(
+                    f"{user.email} has no password or GitHub link to sign in with (deactivating unlinks GitHub); "
+                    "set a password to reactivate it"
+                )
             user.is_active = body.is_active
         if body.full_name is not None:
             user.full_name = body.full_name.strip()
@@ -140,7 +147,7 @@ async def update(user_id: uuid.UUID, body: UserUpdate, ctx: Writer, request: Req
     except UserError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     if revoke:
-        # A reset or deactivation must cut off every credential, API tokens included.
+        # A reset or deactivation must cut off every credential: sessions, API tokens and GitHub links.
         await revoke_user_credentials(db, user)
     details = body.model_dump(exclude_none=True, exclude={"password"})
     if body.password:
@@ -165,6 +172,37 @@ async def delete(user_id: uuid.UUID, ctx: Writer, request: Request, db: DB) -> N
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     audit.record(db, "user.delete", actor=ctx.user, target=user, summary=f"Deleted {user.email}", request=request)
     await db.delete(user)
+    await db.commit()
+
+
+@router.delete("/{user_id}/github", status_code=204)
+async def unlink_user_github(user_id: uuid.UUID, ctx: Writer, request: Request, db: DB) -> None:
+    """Remove a user's GitHub link (one they did not add, say) without deleting the account.
+
+    Only the link goes; their password, sessions and API tokens stay. A user with no password is
+    refused, since the link is their only way in: a password reset sets one, signs them out,
+    deletes their API tokens and unlinks GitHub (the users page offers that instead).
+    """
+    user = await _get(db, user_id)
+    if user.id == ctx.user.id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Unlink your own GitHub from your profile (DELETE /api/v1/auth/me/github)"
+        )
+    _ensure_can_manage(ctx.user, user)
+    account = user.github
+    if account is None:
+        return
+    if user.password_hash is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"{user.email} has no password and could no longer sign in; reset their password instead, "
+            "which also unlinks GitHub",
+        )
+    user.oauth_accounts.remove(account)
+    audit.record(
+        db, "user.github_unlinked", actor=ctx.user, target=user,
+        summary=f"Unlinked @{account.login} from {user.email}", request=request,
+    )
     await db.commit()
 
 

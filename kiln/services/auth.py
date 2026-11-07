@@ -20,12 +20,24 @@ from kiln.core.security import (
     verify_password_async,
 )
 from kiln.db.base import utcnow
-from kiln.models import ApiToken, User, UserSession
+from kiln.models import ApiToken, OAuthAccount, User, UserSession
 from kiln.services.audit import client_ip
 
 SESSION_COOKIE = "kiln_session"
 CSRF_HEADER = "X-CSRF-Token"
 _TOUCH_INTERVAL = timedelta(minutes=5)
+# Adding or removing a sign-in method (a first password, a GitHub link) needs a sign-in this recent, so a
+# stolen session cookie cannot plant a credential that outlives it.
+RECENT_SIGN_IN_MAX_AGE = timedelta(minutes=15)
+
+
+def signed_in_recently(session: UserSession) -> bool:
+    return utcnow() - session.created_at <= RECENT_SIGN_IN_MAX_AGE
+
+
+def sign_in_again(action: str) -> str:
+    """The refusal shown when ``action`` needs a more recent sign-in."""
+    return f"Sign out and sign in again, then {action} within {RECENT_SIGN_IN_MAX_AGE.seconds // 60} minutes"
 
 
 @dataclass
@@ -133,7 +145,21 @@ async def revoke_user_tokens(db: AsyncSession, user: User) -> None:
     await db.execute(delete(ApiToken).where(ApiToken.user_id == user.id))
 
 
+async def revoke_user_github(db: AsyncSession, user: User) -> list[str]:
+    """Unlink every GitHub account from ``user``. Returns the logins that were linked."""
+    logins = [a.login for a in user.oauth_accounts]
+    user.oauth_accounts.clear()
+    await db.flush()
+    # Also catch a link a concurrent callback committed after ``user`` was loaded.
+    await db.execute(delete(OAuthAccount).where(OAuthAccount.user_id == user.id))
+    return logins
+
+
 async def revoke_user_credentials(db: AsyncSession, user: User) -> None:
-    """Sign the user out everywhere and delete their API tokens (admin reset, deactivation)."""
+    """Sign the user out everywhere, delete their API tokens and unlink GitHub (admin reset, deactivation).
+
+    A GitHub link is a credential too: one planted with a stolen session must not survive a reset.
+    """
     await revoke_user_sessions(db, user)
     await revoke_user_tokens(db, user)
+    await revoke_user_github(db, user)

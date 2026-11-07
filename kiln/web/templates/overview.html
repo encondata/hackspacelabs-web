@@ -15,7 +15,8 @@
     {% if auth.can(Perm.REPOS_SYNC) and user.github %}
     <button class="btn" data-api="POST /api/v1/repositories/sync" data-success="Repositories synced from GitHub" data-then="reload">{{ icon("github") }} Sync GitHub</button>
     {% endif %}
-    {% if auth.can(Perm.HOSTS_WRITE) %}<a class="btn" href="/hosts?add=1">{{ icon("plus") }} Add Host</a>{% endif %}
+    {# The add-host dialog lives on /hosts, which needs hosts:read. #}
+    {% if can_hosts and auth.can(Perm.HOSTS_WRITE) %}<a class="btn" href="/hosts?add=1">{{ icon("plus") }} Add Host</a>{% endif %}
     {% if auth.can(Perm.INSTANCES_WRITE) %}<a class="btn btn-primary" href="/instances/new">{{ icon("rocket") }} New Deployment</a>{% endif %}
   </div>
 </div>

@@ -7,6 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import func, or_, select
+from sqlalchemy.orm.attributes import flag_modified
 
 from kiln.api.deps import DB, Auth, not_found, require
 from kiln.core.permissions import Perm
@@ -61,6 +62,29 @@ async def _get(db: DB, host_id: uuid.UUID) -> Host:
     if host is None:
         raise not_found("Host")
     return host
+
+
+def _forget_host_key(host: Host) -> None:
+    """Clear the pinned key and health status, so the host must be verified again.
+
+    The columns are always written, even when this session loaded them as already empty: a check that
+    pinned a key after they were loaded must not keep that key.
+    """
+    host.host_key = host.host_key_fingerprint = None
+    host.status = HostStatus.UNKNOWN
+    host.last_error = None
+    for column in ("host_key", "host_key_fingerprint", "status", "last_error"):
+        flag_modified(host, column)
+
+
+async def _stored_fingerprint(db: DB, host: Host) -> str | None:
+    """The pinned key's fingerprint as stored now, read with a row lock, before ``_forget_host_key``.
+
+    A check may have pinned a key since ``host`` was loaded, and that is the key being cleared. On PostgreSQL
+    the lock also makes this wait for a check that is writing its result, or a later check wait for this
+    request (its compare-and-set then no longer matches and the result is discarded).
+    """
+    return await db.scalar(select(Host.host_key_fingerprint).where(Host.id == host.id).with_for_update())
 
 
 @router.get("")
@@ -121,7 +145,8 @@ async def update_host(host_id: uuid.UUID, body: HostUpdate, ctx: Writer, request
             raise HTTPException(status.HTTP_409_CONFLICT, "A host with this name already exists")
         host.name = body.name
     moved = (body.hostname and body.hostname != host.hostname) or (body.port and body.port != host.port)
-    old_address, old_fingerprint = host.address, host.host_key_fingerprint
+    old_address = host.address
+    old_fingerprint = await _stored_fingerprint(db, host) if moved else None
     for field in ("hostname", "port", "username", "environment", "description", "deploy_root"):
         value = getattr(body, field)
         if value is not None:
@@ -129,9 +154,7 @@ async def update_host(host_id: uuid.UUID, body: HostUpdate, ctx: Writer, request
     _apply_credentials(host, body)
     summary = f"Updated host {host.name}"
     if moved:  # possibly a different machine: forget the pinned host key and re-verify
-        host.host_key = host.host_key_fingerprint = None
-        host.status = HostStatus.UNKNOWN
-        host.last_error = None
+        _forget_host_key(host)
         summary += f" (address {old_address} -> {host.address})"
     audit.record(db, "host.update", actor=ctx.user, target=host, summary=summary, request=request)
     if moved and old_fingerprint:
@@ -170,10 +193,8 @@ async def check(host_id: uuid.UUID, ctx: Auth, request: Request, db: DB) -> Host
 @router.post("/{host_id}/reset-host-key")
 async def reset_host_key(host_id: uuid.UUID, ctx: Writer, request: Request, db: DB) -> HostOut:
     host = await _get(db, host_id)
-    old = host.host_key_fingerprint
-    host.host_key = host.host_key_fingerprint = None
-    host.status = HostStatus.UNKNOWN
-    host.last_error = None
+    old = await _stored_fingerprint(db, host)
+    _forget_host_key(host)
     audit.record(db, "host.key_reset", actor=ctx.user, target=host, summary=f"Reset pinned key {old} for {host.name}", request=request)
     await db.commit()
     return host_out(host)

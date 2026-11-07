@@ -17,6 +17,12 @@ log = logging.getLogger(__name__)
 # pg_advisory_xact_lock key shared by the first-admin and last-admin checks.
 _ACCOUNTS_LOCK_KEY = 0x6B696C6E
 
+FIRST_ADMIN_RESERVED = (
+    "Kiln has no admin yet: KILN_ADMIN_EMAIL reserves the first account, but that admin was not created. "
+    "Check the server log, or run `kiln create-admin`"
+)
+NO_ADMIN_YET = "Kiln has no admin yet; create the first one with `kiln create-admin`"
+
 
 class UserError(ValueError):
     pass
@@ -74,10 +80,17 @@ async def create_user(
     full_name: str = "",
     role_names: list[str] | None = None,
     avatar_url: str | None = None,
+    allow_first_admin: bool | None = None,
 ) -> User:
     """Create a user. The very first account always becomes an admin.
 
     ``role_names=None`` gives the default role; an empty list gives no roles.
+
+    ``allow_first_admin`` says whether this call may create that first account: True for the
+    configured-admin paths (``bootstrap`` and ``kiln create-admin``), False to refuse it with a
+    ``UserError``. The default, None, allows it unless ``KILN_ADMIN_EMAIL`` reserves the seat for the
+    configured admin. (None rather than False keeps direct service calls, such as the test helpers,
+    working on an empty database; the web and API callers pass an explicit value.)
     """
     email = email.strip().lower()
     if password is not None:
@@ -91,6 +104,9 @@ async def create_user(
     await lock_accounts(db)
     first_user = await user_count(db) == 0
     if first_user:
+        reserved = bool(get_settings().admin_email)
+        if allow_first_admin is False or (allow_first_admin is None and reserved):
+            raise UserError(FIRST_ADMIN_RESERVED if reserved else NO_ADMIN_YET)
         names = ["admin"]
     elif role_names is None:
         names = [get_settings().default_role]
@@ -141,18 +157,41 @@ async def bootstrap(db: AsyncSession) -> None:
     settings = get_settings()
     if await db.scalar(select(Role.id).where(Role.name == settings.default_role)) is None:
         log.error("KILN_DEFAULT_ROLE=%s is not an existing role; sign-ups will fail until it is created", settings.default_role)
-    if settings.admin_email and settings.admin_password and await user_count(db) == 0:
-        try:
-            await create_user(
-                db, email=settings.admin_email, password=settings.admin_password, full_name="Administrator"
-            )
-        except UserError as exc:
-            # Keep serving: a crash here would restart the container forever.
-            log.error(
-                "Admin account %s from KILN_ADMIN_EMAIL was not created: %s. "
-                "Fix KILN_ADMIN_PASSWORD and restart, or run `kiln create-admin`.",
-                settings.admin_email, exc,
-            )
-        else:
-            log.info("Bootstrapped admin account %s from KILN_ADMIN_EMAIL", settings.admin_email)
+    if settings.admin_email:
+        await _bootstrap_admin(db, settings.admin_email, settings.admin_password)
     await db.commit()
+
+
+async def _bootstrap_admin(db: AsyncSession, email: str, password: str | None) -> None:
+    """Create the KILN_ADMIN_EMAIL admin on an empty database.
+
+    While that email is set and no account exists, GitHub sign-in and self-registration refuse to
+    create the first (admin) account, so a failure here never leaves the admin seat open to whoever
+    signs in first. Kiln keeps serving either way: a crash here would restart the container forever.
+    """
+    if await user_count(db) > 0:
+        if await get_user_by_email(db, email) is None:
+            log.warning(
+                "KILN_ADMIN_EMAIL=%s is set, but Kiln already has users and none with that email, so it was "
+                "ignored. Check who the existing admins are, and run `kiln create-admin` if you need this one.",
+                email,
+            )
+        return
+    pending = "GitHub sign-in and self-registration cannot create the first account until it exists"
+    if not password:
+        log.error(
+            "Admin account %s from KILN_ADMIN_EMAIL was not created: KILN_ADMIN_PASSWORD is not set. "
+            "Set it and restart, or run `kiln create-admin`. %s.",
+            email, pending,
+        )
+        return
+    try:
+        await create_user(db, email=email, password=password, full_name="Administrator", allow_first_admin=True)
+    except UserError as exc:
+        log.error(
+            "Admin account %s from KILN_ADMIN_EMAIL was not created: %s. "
+            "Fix KILN_ADMIN_PASSWORD and restart, or run `kiln create-admin`. %s.",
+            email, exc, pending,
+        )
+    else:
+        log.info("Bootstrapped admin account %s from KILN_ADMIN_EMAIL", email)

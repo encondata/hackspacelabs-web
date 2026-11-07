@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from kiln.core.permissions import validate_permissions
 from kiln.models import Deployment, Host, Instance, Repository, User
@@ -15,12 +15,29 @@ from kiln.services import deployer
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")
 _VOLUME_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+# Branch names are identifiers and never cut, so the limit is that of the columns holding them (255).
+BRANCH_MAX = Instance.__table__.c.branch.type.length
+
+
+def _no_nul(value: str) -> str:
+    if "\x00" in value:
+        raise ValueError("must not contain NUL characters")
+    return value
+
+
+# Request text. PostgreSQL rejects NUL in text and jsonb values, so it is refused here with a 422.
+# Passwords stay plain ``str``: they are only hashed or encrypted, never stored as text.
+NoNul = AfterValidator(_no_nul)
+# ``name: Str = Field(max_length=...)`` checks the field's own constraints first. Optional fields and
+# item types put them before NoNul (``Annotated[str, Field(...), NoNul] | None``): constraints that
+# follow a validator are checked outside the string, with vaguer messages and no OpenAPI pattern.
+Str = Annotated[str, NoNul]
 
 # List items are bounded like the columns they end up in (roles.name is String(64)).
-RoleName = Annotated[str, Field(max_length=64)]
-Permission = Annotated[str, Field(max_length=64)]
-EnvKey = Annotated[str, Field(max_length=255)]
-EnvValue = Annotated[str, Field(max_length=32768)]
+RoleName = Annotated[str, Field(max_length=64), NoNul]
+Permission = Annotated[str, Field(max_length=64), NoNul]
+EnvKey = Annotated[str, Field(max_length=255), NoNul]
+EnvValue = Annotated[str, Field(max_length=32768), NoNul]
 
 
 class Out(BaseModel):
@@ -31,18 +48,18 @@ class Out(BaseModel):
 
 
 class LoginIn(BaseModel):
-    email: str = Field(max_length=320)
+    email: Str = Field(max_length=320)
     password: str = Field(max_length=500)
 
 
 class RegisterIn(BaseModel):
     email: EmailStr = Field(max_length=320)
     password: str = Field(max_length=500)
-    full_name: str = Field("", max_length=200)
+    full_name: Str = Field("", max_length=200)
 
 
 class ProfileUpdate(BaseModel):
-    full_name: str = Field(max_length=200)
+    full_name: Str = Field(max_length=200)
 
 
 class PasswordChange(BaseModel):
@@ -92,15 +109,15 @@ class SessionOut(BaseModel):
 
 class UserCreate(BaseModel):
     email: EmailStr = Field(max_length=320)
-    full_name: str = Field("", max_length=200)
+    full_name: Str = Field("", max_length=200)
     password: str | None = Field(None, max_length=500)
     # Pre-link a GitHub account so the user can sign in with GitHub straight away.
-    github_login: str | None = Field(None, max_length=39, pattern=r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+    github_login: Annotated[str, Field(max_length=39, pattern=r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"), NoNul] | None = None
     roles: list[RoleName] = Field(default_factory=lambda: ["viewer"], max_length=50)
 
 
 class UserUpdate(BaseModel):
-    full_name: str | None = Field(None, max_length=200)
+    full_name: Annotated[str, Field(max_length=200), NoNul] | None = None
     is_active: bool | None = None
     roles: list[RoleName] | None = Field(None, max_length=50)
     password: str | None = Field(None, max_length=500)
@@ -118,8 +135,8 @@ class RoleOut(Out):
 
 
 class RoleIn(BaseModel):
-    name: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
-    description: str = Field("", max_length=255)
+    name: Str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
+    description: Str = Field("", max_length=255)
     permissions: list[Permission] = Field(max_length=200)
 
     @field_validator("permissions")
@@ -129,7 +146,7 @@ class RoleIn(BaseModel):
 
 
 class RoleUpdate(BaseModel):
-    description: str | None = Field(None, max_length=255)
+    description: Annotated[str, Field(max_length=255), NoNul] | None = None
     permissions: list[Permission] | None = Field(None, max_length=200)
 
     @field_validator("permissions")
@@ -156,7 +173,7 @@ class TokenOut(Out):
 
 
 class TokenCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
+    name: Str = Field(min_length=1, max_length=100)
     expires_in_days: int | None = Field(None, ge=1, le=3650)
 
 
@@ -189,13 +206,13 @@ class HostOut(Out):
 
 
 class _HostFields(BaseModel):
-    hostname: str | None = Field(None, min_length=1, max_length=255, pattern=r"^[A-Za-z0-9.:\-\[\]]+$")
+    hostname: Annotated[str, Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9.:\-\[\]]+$"), NoNul] | None = None
     port: int | None = Field(None, ge=1, le=65535)
-    username: str | None = Field(None, min_length=1, max_length=64, pattern=r"^[a-z_][a-z0-9_.-]*$")
-    environment: str | None = Field(None, max_length=32)
-    description: str | None = Field(None, max_length=255)
-    deploy_root: str | None = Field(None, max_length=255)
-    private_key: str | None = Field(None, max_length=20000)
+    username: Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[a-z_][a-z0-9_.-]*$"), NoNul] | None = None
+    environment: Annotated[str, Field(max_length=32), NoNul] | None = None
+    description: Annotated[str, Field(max_length=255), NoNul] | None = None
+    deploy_root: Annotated[str, Field(max_length=255), NoNul] | None = None
+    private_key: Annotated[str, Field(max_length=20000), NoNul] | None = None
     key_passphrase: str | None = Field(None, max_length=500)
     password: str | None = Field(None, max_length=500)
 
@@ -216,16 +233,16 @@ class _HostFields(BaseModel):
 
 
 class HostCreate(_HostFields):
-    name: str = Field(pattern=_NAME_RE.pattern)
-    hostname: str = Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9.:\-\[\]]+$")
-    username: str = Field(min_length=1, max_length=64, pattern=r"^[a-z_][a-z0-9_.-]*$")
+    name: Str = Field(pattern=_NAME_RE.pattern)
+    hostname: Str = Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9.:\-\[\]]+$")
+    username: Str = Field(min_length=1, max_length=64, pattern=r"^[a-z_][a-z0-9_.-]*$")
     port: int = Field(22, ge=1, le=65535)
     # "generate" asks Kiln to create an ed25519 key pair and show the public key.
     auth_method: Literal["generate", "key", "password"] = "generate"
 
 
 class HostUpdate(_HostFields):
-    name: str | None = Field(None, pattern=_NAME_RE.pattern)
+    name: Annotated[str, Field(pattern=_NAME_RE.pattern), NoNul] | None = None
     auth_method: Literal["generate", "key", "password"] | None = None
 
 
@@ -247,6 +264,7 @@ class RepoOut(Out):
     pushed_at: datetime | None
     detected_config: dict[str, Any]
     deployable: bool
+    default_branch_usable: bool
     synced_at: datetime | None
 
     @classmethod
@@ -270,8 +288,8 @@ class PortMapping(BaseModel):
 
 
 class VolumeMapping(BaseModel):
-    source: str = Field(min_length=1, max_length=255)
-    target: str = Field(min_length=1, max_length=255)
+    source: Str = Field(min_length=1, max_length=255)
+    target: Str = Field(min_length=1, max_length=255)
 
     @field_validator("source")
     @classmethod
@@ -291,11 +309,11 @@ class VolumeMapping(BaseModel):
 
 
 class _InstanceFields(BaseModel):
-    branch: str | None = Field(None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._/-]+$")
+    branch: Annotated[str, Field(min_length=1, max_length=BRANCH_MAX, pattern=r"^[A-Za-z0-9._/-]+$"), NoNul] | None = None
     build_source: Literal["dockerfile", "compose"] | None = None
-    dockerfile_path: str | None = Field(None, max_length=255)
-    build_context: str | None = Field(None, max_length=255)
-    compose_file: str | None = Field(None, max_length=255)
+    dockerfile_path: Annotated[str, Field(max_length=255), NoNul] | None = None
+    build_context: Annotated[str, Field(max_length=255), NoNul] | None = None
+    compose_file: Annotated[str, Field(max_length=255), NoNul] | None = None
     env: dict[EnvKey, EnvValue] | None = Field(None, max_length=500)
     ports: list[PortMapping] | None = Field(None, max_length=100)
     volumes: list[VolumeMapping] | None = Field(None, max_length=100)
@@ -317,7 +335,7 @@ class _InstanceFields(BaseModel):
 
 
 class InstanceCreate(_InstanceFields):
-    name: str = Field(min_length=1, max_length=100)
+    name: Str = Field(min_length=1, max_length=100)
     repository_id: uuid.UUID
     host_id: uuid.UUID
     build_source: Literal["dockerfile", "compose"] = "dockerfile"
@@ -325,8 +343,11 @@ class InstanceCreate(_InstanceFields):
 
 
 class InstanceUpdate(_InstanceFields):
-    name: str | None = Field(None, min_length=1, max_length=100)
+    name: Annotated[str, Field(min_length=1, max_length=100), NoNul] | None = None
     host_id: uuid.UUID | None = None
+    # Erase the stored variables on purpose, including ones that can no longer be decrypted.
+    # (An empty ``env`` never replaces variables that can't be decrypted.)
+    clear_env: bool = False
 
 
 class InstanceOut(Out):
@@ -343,6 +364,8 @@ class InstanceOut(Out):
     build_context: str
     compose_file: str
     env_keys: list[str]
+    # Variables are stored but can't be decrypted with the configured KILN_ENCRYPTION_KEY.
+    env_unreadable: bool = False
     ports: list[dict[str, Any]]
     volumes: list[dict[str, Any]]
     status: str
@@ -351,7 +374,8 @@ class InstanceOut(Out):
     created_at: datetime
 
     @classmethod
-    def of(cls, i: Instance) -> InstanceOut:
+    def of(cls, i: Instance, *, env_unreadable: bool = False) -> InstanceOut:
+        """``env_unreadable`` needs a query (see ``api.v1.instances.env_unreadable``), so callers pass it."""
         return cls(
             id=i.id,
             name=i.name,
@@ -366,6 +390,7 @@ class InstanceOut(Out):
             build_context=i.build_context,
             compose_file=i.compose_file,
             env_keys=sorted((i.env or {}).keys()),
+            env_unreadable=env_unreadable,
             ports=i.ports,
             volumes=i.volumes,
             status=i.status,

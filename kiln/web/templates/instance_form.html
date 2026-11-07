@@ -34,9 +34,11 @@
 {%- endmacro %}
 
 {% block content %}
+{# This page only needs instances:write; the instance pages it links to need instances:read. #}
+{% set can_view = auth.can(Perm.INSTANCES_READ) %}
 <div class="page-head">
   <div>
-    {% if editing %}<div class="breadcrumb"><a href="/instances">Instances</a>{{ icon("chevron-right", "i-sm") }}<a href="/instances/{{ instance.id }}">{{ instance.name }}</a>{{ icon("chevron-right", "i-sm") }}<span>Edit</span></div>{% endif %}
+    {% if editing and can_view %}<div class="breadcrumb"><a href="/instances">Instances</a>{{ icon("chevron-right", "i-sm") }}<a href="/instances/{{ instance.id }}">{{ instance.name }}</a>{{ icon("chevron-right", "i-sm") }}<span>Edit</span></div>{% endif %}
     <h1>{{ "Edit " ~ instance.name if editing else "Create Instance" }}</h1>
     <p class="lede">{{ "Changes apply on the next deployment." if editing else "Deploy a GitHub repository as a containerized application on a Docker host." }}</p>
   </div>
@@ -47,7 +49,7 @@
   {% if not repos %}
     {{ empty("repositories", "No repositories yet", "Sync your repositories from GitHub first.", None) }}
   {% else %}
-    {{ empty("hosts", "No hosts yet", "Add a Docker host before creating an instance.", "/hosts?add=1" if auth.can(Perm.HOSTS_WRITE) else None, "Add host") }}
+    {{ empty("hosts", "No hosts yet", "Add a Docker host before creating an instance.", "/hosts?add=1" if auth.can(Perm.HOSTS_READ) and auth.can(Perm.HOSTS_WRITE) else None, "Add host") }}
   {% endif %}
 </section>
 {% else %}
@@ -60,7 +62,7 @@
 
 <form class="grid grid-form" data-preview-form method="post" action="/js-required"
       data-form="{{ ('PATCH /api/v1/instances/' ~ instance.id) if editing else 'POST /api/v1/instances' }}"
-      data-then="redirect:/instances/{id}" data-success="{{ 'Instance updated' if editing else 'Instance created' }}">
+      data-then="{{ 'redirect:/instances/{id}' if can_view else 'redirect:/' }}" data-success="{{ 'Instance updated' if editing else 'Instance created' }}">
   <div class="stack">
     <section class="card">
       <div class="card-head"><span class="head-icon">{{ icon("repositories", "i-lg") }}</span><div><h2>Repository</h2><p>Choose the GitHub repository and branch to deploy.</p></div></div>
@@ -70,7 +72,7 @@
           {# On create, data-fill-* resets the build defaults and name when another repository is picked. #}
           <select class="input" id="repo-select" name="repository_id" data-branches="#branch-select" {{ 'disabled' if editing else 'data-fill' }}>
             {% for r in repos %}
-            <option value="{{ r.id }}" data-default="{{ r.default_branch }}"
+            <option value="{{ r.id }}" data-default="{{ r.default_branch if r.default_branch_usable else '' }}"
               {%- if not editing %} data-fill-name="{{ r.name }}-prod" data-fill-compose_file="{{ r.compose_file or 'docker-compose.yml' }}" data-fill-build_source="{{ 'compose' if r.compose_file and not r.has_dockerfile else 'dockerfile' }}"{% endif %}
               {{ 'selected' if selected_repo and r.id == selected_repo.id }}>{{ r.full_name }}{% if r.archived %} (archived){% elif not r.deployable %} (no Dockerfile detected){% endif %}</option>
             {% endfor %}
@@ -78,7 +80,11 @@
         </div>
         <div class="field">
           <label for="branch-select">Branch</label>
-          <select class="input" id="branch-select" name="branch" data-current="{{ instance.branch if editing else '' }}"><option>{{ instance.branch if editing else (selected_repo.default_branch if selected_repo else 'main') }}</option></select>
+          <select class="input" id="branch-select" name="branch" required data-current="{{ instance.branch if editing else '' }}">
+            {%- if editing %}<option>{{ instance.branch }}</option>
+            {%- elif selected_repo and selected_repo.default_branch_usable %}<option>{{ selected_repo.default_branch }}</option>
+            {%- else %}<option value="" selected disabled>Choose a branch</option>{% endif -%}
+          </select>
         </div>
       </div>
     </section>
@@ -132,6 +138,13 @@
         </div>
         <div class="field">
           <span class="label-text">Environment variables <span class="subtle">(encrypted at rest)</span></span>
+          {% if editing and env_unreadable %}
+          {# Saving with no variables keeps the unreadable values (the old key may come back); entering any replaces them. #}
+          <div class="callout warning">{{ icon("alert") }}<div>Stored variables could not be decrypted (wrong <code>KILN_ENCRYPTION_KEY</code>?). Enter them again to replace them, or restore the key.
+            <div style="margin-top: 10px"><button class="btn btn-sm btn-danger" type="button" data-api="PATCH /api/v1/instances/{{ instance.id }}" data-body='{"clear_env": true}'
+              data-confirm="Delete the stored variables of {{ instance.name }} for good? Not even the old key can bring them back, and the next deploy runs with no variables."
+              data-success="Stored variables cleared" data-then="reload">{{ icon("trash", "i-sm") }} Clear stored variables</button></div></div></div>
+          {% endif %}
           <div class="repeater" id="env-rep" data-repeater="env" data-kind="map">
             {% for k, v in env.items() %}{{ env_row(k, v) }}{% endfor %}
             {% if not env %}{{ env_row() }}{% endif %}
@@ -179,7 +192,7 @@
       </dl>
       {% if editing %}
       <button class="btn btn-primary btn-lg btn-block" type="submit">{{ icon("check") }} Save changes</button>
-      <a class="btn btn-block" href="/instances/{{ instance.id }}">Cancel</a>
+      {% if can_view %}<a class="btn btn-block" href="/instances/{{ instance.id }}">Cancel</a>{% endif %}
       {% else %}
       {% if auth.can(Perm.DEPLOYMENTS_CREATE) %}
       <button class="btn btn-primary btn-lg btn-block" type="submit" name="deploy" value="true">{{ icon("rocket") }} Deploy Instance</button>

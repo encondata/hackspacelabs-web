@@ -25,9 +25,11 @@
           <a class="btn" href="/auth/github/link">{{ icon("sync") }} Re-authorize</a>
           <button class="btn btn-danger" data-api="DELETE /api/v1/auth/me/github" data-confirm="Unlink GitHub from your Kiln account?" data-then="reload">Unlink</button>
         </div>
+        <p class="help">Re-authorizing and unlinking need a sign-in from the last 15 minutes.</p>
       {% elif settings.github_enabled %}
         <p class="muted">Not connected.</p>
         <div><a class="btn btn-github" href="/auth/github/link">{{ icon("github") }} Connect GitHub</a></div>
+        <p class="help">Connecting needs a sign-in from the last 15 minutes.</p>
       {% else %}
         <div class="callout">{{ icon("info") }}<div>GitHub isn't configured for this Kiln. Create an OAuth App at
           <span class="mono">github.com/settings/developers</span> with callback URL

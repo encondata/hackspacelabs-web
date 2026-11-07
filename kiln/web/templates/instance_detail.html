@@ -3,11 +3,12 @@
 {% block title %}{{ instance.name }}{% endblock %}
 {% block content %}
 {% set live = instance.status not in ("created",) %}
+{% set can_hosts = auth.can(Perm.HOSTS_READ) %}
 <div class="page-head">
   <div>
     <div class="breadcrumb"><a href="/instances">Instances</a>{{ icon("chevron-right", "i-sm") }}<span>{{ instance.name }}</span></div>
     <h1 class="row">{{ instance.name }} {{ badge("instance", instance.status) }}</h1>
-    <p class="lede">{{ instance.repository.full_name }} · <span class="mono">{{ instance.branch }}</span> on <a href="/hosts/{{ instance.host.id }}">{{ instance.host.name }}</a></p>
+    <p class="lede">{{ instance.repository.full_name }} · <span class="mono">{{ instance.branch }}</span> on {% if can_hosts %}<a href="/hosts/{{ instance.host.id }}">{{ instance.host.name }}</a>{% else %}{{ instance.host.name }}{% endif %}</p>
   </div>
   <div class="actions">
     {% if auth.can(Perm.INSTANCES_OPERATE) and live and instance.status != "deploying" %}
@@ -20,7 +21,8 @@
     {% endif %}
     {% if auth.can(Perm.INSTANCES_WRITE) %}<a class="btn" href="/instances/{{ instance.id }}/edit">{{ icon("edit") }} Configure</a>{% endif %}
     {% if auth.can(Perm.DEPLOYMENTS_CREATE) %}
-    <button class="btn btn-primary" data-api="POST /api/v1/instances/{{ instance.id }}/deploy" data-then="redirect:/deployments/{id}" {{ 'disabled' if instance.status == 'deploying' }}>{{ icon("rocket") }} Deploy {{ instance.branch }}</button>
+    {# Without deployments:read the deployment page would be a 403, so stay here and say it was queued. #}
+    <button class="btn btn-primary" data-api="POST /api/v1/instances/{{ instance.id }}/deploy" {% if auth.can(Perm.DEPLOYMENTS_READ) %}data-then="redirect:/deployments/{id}"{% else %}data-then="reload" data-success="Deployment queued"{% endif %} {{ 'disabled' if instance.status == 'deploying' }}>{{ icon("rocket") }} Deploy {{ instance.branch }}</button>
     {% endif %}
   </div>
 </div>
@@ -40,8 +42,15 @@
         <dt>{{ icon("globe", "i-sm") }} Ports</dt><dd>{% for p in instance.ports %}<span class="chip mono">{{ p.host }} → {{ p.container }}/{{ p.protocol }}</span> {% else %}<span class="muted">None</span>{% endfor %}</dd>
         <dt>{{ icon("database", "i-sm") }} Volumes</dt><dd>{% for v in instance.volumes %}<span class="chip mono">{{ v.source }} → {{ v.target }}</span> {% else %}<span class="muted">None</span>{% endfor %}</dd>
         {% endif %}
-        <dt>{{ icon("key", "i-sm") }} Environment</dt><dd>{% for k in (instance.env or {}).keys()|sort %}<span class="chip mono">{{ k }}</span> {% else %}<span class="muted">None</span>{% endfor %}</dd>
-        <dt>{{ icon("hosts", "i-sm") }} Path on host</dt><dd class="mono">{{ instance.host.deploy_root }}/{{ instance.slug }}</dd>
+        <dt>{{ icon("key", "i-sm") }} Environment</dt><dd>
+          {%- if env_unreadable -%}
+          <span class="badge warning">Unreadable</span> Stored variables could not be decrypted (wrong <code>KILN_ENCRYPTION_KEY</code>?). Deploys fail until they are entered again or the key is restored.
+          {%- if auth.can(Perm.INSTANCES_WRITE) %} <a href="/instances/{{ instance.id }}/edit">Re-enter them</a>{% endif %}
+          {%- else -%}
+          {% for k in (instance.env or {}).keys()|sort %}<span class="chip mono">{{ k }}</span> {% else %}<span class="muted">None</span>{% endfor %}
+          {%- endif -%}
+        </dd>
+        {% if can_hosts %}<dt>{{ icon("hosts", "i-sm") }} Path on host</dt><dd class="mono">{{ instance.host.deploy_root }}/{{ instance.slug }}</dd>{% endif %}
       </dl>
     </div>
   </section>

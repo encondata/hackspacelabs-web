@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import shlex
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
@@ -24,6 +26,10 @@ if TYPE_CHECKING:
     from kiln.models import Host
 
 LineCallback = Callable[[str], Awaitable[None]]
+# Output kept per line (the deployment log's cap too), and lines kept when output is streamed.
+MAX_LINE_CHARS = 16 * 1024
+LINE_TRUNCATED = " [line truncated]"
+TAIL_LINES = 15
 _SEP = "::kiln::"
 _UNSAFE_COMMENT = re.compile(r"[^A-Za-z0-9@._-]+")
 CREDENTIALS_UNREADABLE = "No usable SSH credentials are stored for this host (missing or could not be decrypted); re-enter them on the host page"
@@ -51,7 +57,7 @@ class HostKeyNotPinned(SSHError):
 
 class CommandFailed(SSHError):
     def __init__(self, command: str, exit_status: int, output: str) -> None:
-        tail = "\n".join(output.strip().splitlines()[-15:])
+        tail = "\n".join(output.strip().splitlines()[-TAIL_LINES:])
         super().__init__(f"Command exited with status {exit_status}:\n{tail}")
         self.command = command
         self.exit_status = exit_status
@@ -113,6 +119,11 @@ def clip(value: str, limit: int) -> str:
     return value.replace("\x00", "")[:limit]
 
 
+def clip_line(line: str) -> str:
+    """``line`` cut to ``MAX_LINE_CHARS``, marked when something was cut."""
+    return line if len(line) <= MAX_LINE_CHARS else line[:MAX_LINE_CHARS] + LINE_TRUNCATED
+
+
 def safe_comment(comment: str | bytes | None) -> str:
     """A key comment reduced to characters that are safe inside a shell command line."""
     if isinstance(comment, bytes):
@@ -162,11 +173,23 @@ class RemoteSession:
         on_line: LineCallback | None = None,
         timeout: float | None = None,
     ) -> tuple[int, str]:
-        lines: list[str] = []
+        """Run ``command`` with ``/bin/sh`` and return (exit status, output with stderr mixed in).
+
+        sshd hands the command to the user's login shell, so it is wrapped in ``exec /bin/sh -c``:
+        Kiln's commands are POSIX sh, which zsh, for one, parses differently. stdin is closed,
+        so nothing remote can wait for input. With ``on_line`` every line is passed on and only
+        the last ``TAIL_LINES`` are returned, so a long build cannot fill memory. Returned lines
+        are cut to ``MAX_LINE_CHARS`` (and marked); ``CommandFailed`` names ``command`` itself.
+        """
+        lines: deque[str] | list[str] = deque(maxlen=TAIL_LINES) if on_line is not None else []
         callback_error: Exception | None = None  # raised by on_line: passed through, not blamed on SSH
         try:
             async with self.conn.create_process(
-                command, stderr=asyncssh.STDOUT, encoding="utf-8", errors="replace"
+                "exec /bin/sh -c " + shlex.quote(command),
+                stdin=asyncssh.DEVNULL,
+                stderr=asyncssh.STDOUT,
+                encoding="utf-8",
+                errors="replace",
             ) as proc:
 
                 async def pump() -> None:
@@ -175,7 +198,7 @@ class RemoteSession:
                         if not raw:  # EOF marker; a real blank line arrives as "\n"
                             continue
                         line = raw.rstrip("\r\n").replace("\x00", "")
-                        lines.append(line)
+                        lines.append(clip_line(line))
                         if on_line is not None:
                             try:
                                 await on_line(line)

@@ -66,7 +66,7 @@ async def _ensure_admin(db: AsyncSession, args: argparse.Namespace) -> list[str]
     from kiln.core.security import hash_password
     from kiln.models import ApiToken, UserSession
     from kiln.services import audit
-    from kiln.services.auth import revoke_user_sessions
+    from kiln.services.auth import revoke_user_github, revoke_user_sessions
     from kiln.services.users import (
         UserError,
         check_password_strength,
@@ -82,7 +82,8 @@ async def _ensure_admin(db: AsyncSession, args: argparse.Namespace) -> list[str]
         if not args.password:
             raise UserError("A new account needs a password")
         user = await create_user(
-            db, email=args.email, password=args.password, full_name=args.name, role_names=["admin"]
+            db, email=args.email, password=args.password, full_name=args.name, role_names=["admin"],
+            allow_first_admin=True,
         )
         audit.record(db, "user.create", target=user, summary=f"Created admin {user.email} with kiln create-admin")
         return [f"Created admin {user.email}."]
@@ -92,6 +93,13 @@ async def _ensure_admin(db: AsyncSession, args: argparse.Namespace) -> list[str]
     new_password = args.password if args.reset_password else None
     if args.reset_password:
         check_password_strength(new_password or "")
+    # Deactivation unlinks GitHub, so a deactivated GitHub-only account has no way to sign in left.
+    no_way_in = new_password is None and user.password_hash is None and user.github is None
+    if no_way_in and not user.is_active and args.activate:
+        raise UserError(
+            f"{user.email} has no password or GitHub link to sign in with; add --reset-password to reactivate it. "
+            "Nothing was changed."
+        )
 
     github = f"@{user.github.login}" if user.github else "none"
     lines = [
@@ -109,13 +117,22 @@ async def _ensure_admin(db: AsyncSession, args: argparse.Namespace) -> list[str]
 
     if new_password is None:
         lines.append("Password NOT changed (use --reset-password to set a new one).")
+        if no_way_in:
+            lines.append("It has no password or GitHub link, so nobody can sign in to it (use --reset-password).")
     else:
         user.password_hash = hash_password(new_password)
         sessions = await db.scalar(select(func.count()).select_from(UserSession).where(UserSession.user_id == user.id))
         await revoke_user_sessions(db, user)
         tokens = (await db.execute(delete(ApiToken).where(ApiToken.user_id == user.id))).rowcount
+        # A GitHub link is a credential too: one planted with a stolen session must not survive the reset.
+        unlinked = await revoke_user_github(db, user)
         changes.append("password reset")
         lines.append(f"Password reset; signed out {sessions} session(s) and deleted {tokens} API token(s).")
+        if unlinked:
+            lines.append(
+                f"Unlinked GitHub {', '.join(f'@{login}' for login in unlinked)}; "
+                "the owner can link it again from Settings -> Profile after signing in with the new password."
+            )
 
     if not user.is_active and args.activate:
         user.is_active = True
@@ -165,7 +182,7 @@ async def _rotate_secrets(db: AsyncSession, *, clear_unreadable: bool = False) -
     from sqlalchemy import Text, column, select, table, update
 
     import kiln.models  # noqa: F401  (registers every table on Base.metadata)
-    from kiln.core.crypto import DecryptionError, encrypted_columns, rotate
+    from kiln.core.crypto import DecryptionError, encrypt, encrypted_columns, rotate
     from kiln.db.base import Base
 
     rotated, unreadable = 0, []
@@ -180,7 +197,9 @@ async def _rotate_secrets(db: AsyncSession, *, clear_unreadable: bool = False) -
                 unreadable.append(f"{source.name}.{col.name} (id {row_id})")
                 if not clear_unreadable:
                     continue
-                new = None
+                # Instance env becomes an encrypted JSON null, not NULL: the deployer treats that as
+                # "needs re-entry" and refuses to deploy, instead of deploying with no variables.
+                new = encrypt("null") if (source.name, col.name) == ("instances", "env") else None
             else:
                 rotated += 1
             await db.execute(update(raw).where(raw.c.id == row_id).values({col.name: new}))
@@ -196,7 +215,8 @@ def rotate_encryption_key(args: argparse.Namespace) -> None:
         print("Older keys can now be removed from KILN_ENCRYPTION_KEY.")
         return
     if args.clear_unreadable:
-        print(f"Erased {len(unreadable)} secret(s) no configured key could decrypt; re-enter them in Kiln:")
+        print(f"Erased {len(unreadable)} secret(s) no configured key could decrypt; re-enter them in Kiln.")
+        print("Instances listed here refuse to deploy until their variables are re-entered or cleared:")
         print("\n".join(f"  {u}" for u in unreadable))
         return
     print(f"{len(unreadable)} secret(s) could not be decrypted with any configured key and were left unchanged:")
@@ -243,7 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--reset-password",
         action="store_true",
-        help="Existing account: set a new password, sign out its sessions and delete its API tokens",
+        help="Existing account: set a new password, sign out its sessions, delete its API tokens and unlink GitHub",
     )
     p.add_argument("--activate", action="store_true", help="Existing account: reactivate it if it was deactivated")
 

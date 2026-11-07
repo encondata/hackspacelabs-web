@@ -3,11 +3,14 @@
 Pipeline for one deployment:
 
 1. Check the repository by its GitHub id, then resolve the branch to a commit SHA.
-2. Download the source tarball on the Kiln server (the GitHub token never reaches the host).
+2. Download the source tarball on the Kiln server (the GitHub token never reaches the host)
+   and refuse it if the build context, Dockerfile or compose file path is a link.
 3. Upload it over SFTP and unpack into ``<deploy_root>/<slug>/releases/<sha12>-<deployment>``.
 4. Write ``shared/.env`` (mode 600) from the instance's encrypted environment variables.
    Compose mode writes them to ``shared/kiln.env`` and builds ``shared/.env`` on the host
-   from the repository's ``.env`` followed by Kiln's values, so Kiln's values win.
+   from the repository's ``.env`` followed by Kiln's values, so Kiln's values win. (A repository
+   value that interpolates one Kiln overrides keeps the repository's value in ``${...}`` of the
+   compose file; ``env_file: .env`` sees Kiln's.)
 5. ``docker build`` + ``docker run`` (Dockerfile mode) or ``docker compose up -d --build``.
 6. Point ``current`` at the new release and prune old releases/images.
 
@@ -24,9 +27,11 @@ import logging
 import posixpath
 import re
 import shlex
+import tarfile
 import tempfile
 import time
 import uuid
+import zlib
 from collections import Counter, defaultdict, deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -58,7 +63,7 @@ CLEANUP_IMAGE = "alpine:3.20"
 # The stored build log keeps its first and last part, about 1 MB in total.
 LOG_HEAD_CHARS = 512 * 1024
 LOG_TAIL_CHARS = 512 * 1024
-MAX_LINE_CHARS = 16 * 1024
+MAX_LINE_CHARS = ssh.MAX_LINE_CHARS  # per line of the stored log, as LogSink clips with ssh.clip_line
 # Seconds to wait between attempts to record a deployment's result.
 FINISH_RETRY_DELAYS: tuple[float, ...] = (0.5, 1, 2, 4, 8, 15, 30)
 
@@ -87,7 +92,7 @@ def slugify(value: str) -> str:
 
 
 def clean_relative_path(value: str, *, allow_dot: bool = False) -> str:
-    """Normalise a repository-relative path, rejecting absolute paths and traversal."""
+    """Normalise a repository-relative path, rejecting absolute paths, traversal and options."""
     value = (value or "").strip()
     norm = posixpath.normpath(value) if value else "."
     if norm == ".":
@@ -96,6 +101,8 @@ def clean_relative_path(value: str, *, allow_dot: bool = False) -> str:
         raise ValueError("Path is required")
     if norm.startswith("/") or norm.split("/")[0] == ".." or not _SAFE_PATH.match(norm):
         raise ValueError(f"'{value}' is not a safe relative path")
+    if norm.startswith("-"):  # docker reads "-" as stdin and "-x" as an option
+        raise ValueError(f"'{value}' is not a safe relative path: it must not start with '-'")
     return norm
 
 
@@ -217,6 +224,12 @@ def _compose_project_down(instance: Instance) -> str:
     return f"(cd / && docker compose -p {p} rm -f -s -v; docker compose -p {p} down --remove-orphans) >/dev/null 2>&1 || true"
 
 
+PULL_NEVER_UNSUPPORTED = "docker run on this host does not accept --pull=never: Kiln needs Docker 20.10 or later"
+# Parses the run flags without running anything. An older CLI rejects --pull only when the
+# container is started, after the running one was removed, so this runs before the build.
+_PULL_NEVER_CHECK = f"docker run --pull=never --help >/dev/null 2>&1 || {{ echo {q(PULL_NEVER_UNSUPPORTED)}; exit 1; }}"
+
+
 def _root_rm(parent: str, name: str) -> str:
     """Delete ``parent/name`` through a throwaway container, for files containers wrote as root."""
     return f"docker run --rm --network none -v {parent}:/r {CLEANUP_IMAGE} rm -rf -- /r/{name}"
@@ -240,7 +253,8 @@ def build_commands(instance: Instance, release_dir: str, sha: str) -> list[str]:
 
     image = f"kiln/{instance.slug}:{sha[:12]}"
     run = [
-        "docker run -d",
+        # Never pull: kiln/<slug> on Docker Hub belongs to someone else.
+        "docker run -d --pull=never",
         f"--name {q(instance.container_name)}",
         "--restart unless-stopped",
         f"--env-file {q(paths.env_file)}",
@@ -252,8 +266,12 @@ def build_commands(instance: Instance, release_dir: str, sha: str) -> list[str]:
         run.append(f"-v {q(str(v['source']) + ':' + str(v['target']))}")
     run.append(q(image))
     return [
-        f"cd {q(release_dir)} && BUILDKIT_PROGRESS=plain docker build --pull "
-        f"-t {q(image)} -f {q(instance.dockerfile_path)} --label {q(label)} {q(instance.build_context)}",
+        # Fail here, before the running container is removed, if docker run cannot take
+        # --pull=never or the build exits 0 without loading the image (e.g. a docker-container
+        # buildx builder).
+        f"{_PULL_NEVER_CHECK}; cd {q(release_dir)} && BUILDKIT_PROGRESS=plain docker build --pull "
+        f"-t {q(image)} -f {q(instance.dockerfile_path)} --label {q(label)} {q(instance.build_context)} "
+        f"&& docker image inspect --format . {q(image)} >/dev/null",
         f"{_remove_containers(instance)}; {_compose_project_down(instance)}",
         " ".join(run),
     ]
@@ -263,7 +281,8 @@ def prune_command(instance: Instance, release_dir: str) -> str:
     """Remove old releases and superseded images.
 
     Never removes the release ``current`` points to or the one just deployed. Exits non-zero
-    when some release could not be removed.
+    when some release could not be removed. The loop runs in a subshell, so its ``exit`` ends
+    only the loop in every shell (zsh runs a pipeline's last part in the current shell).
     """
     paths = paths_for(instance)
     releases = q(paths.releases)
@@ -272,15 +291,15 @@ def prune_command(instance: Instance, release_dir: str) -> str:
         f"cd {releases} || exit 1; "
         f"find . -maxdepth 1 -name '.upload-*' -mmin +60 -delete 2>/dev/null; "
         f"cur=$(readlink {q(paths.current)}); cur=${{cur##*/}}; "
-        f"ls -1t | tail -n +{KEEP_RELEASES + 1} | {{ failed=0; while IFS= read -r d; do "
+        f"ls -1t | tail -n +{KEEP_RELEASES + 1} | ( failed=0; while IFS= read -r d; do "
         f'{{ [ "$d" = "$cur" ] || [ "$d" = {keep} ]; }} && continue; '
         f'rm -rf -- "$d" 2>/dev/null || {_root_rm(releases, chr(34) + "$d" + chr(34))} || failed=1; '
-        f"done; exit $failed; }}; status=$?; "
+        f"done; exit $failed ); rc=$?; "
         f"docker image ls --format '{{{{.Repository}}}}:{{{{.Tag}}}}' {q('kiln/' + instance.slug)} "
         f"| tail -n +{KEEP_RELEASES + 1} | xargs -r docker image rm >/dev/null 2>&1; "
         f"docker image prune -f --filter {q('label=' + _label(instance))} >/dev/null 2>&1; "
         f"docker image prune -f --filter {q('label=com.docker.compose.project=' + instance.compose_project)} >/dev/null 2>&1; "
-        f"exit $status"
+        f"exit $rc"
     )
 
 
@@ -308,12 +327,18 @@ def control_command(instance: Instance, action: str) -> str:
     )
 
 
+CONTAINER_FIELDS = ("Names", "Image", "State", "Status", "Ports", "RunningFor")
+# One JSON object per container with only these fields: ``{{json .}}`` includes every label, so
+# its line can pass the ``ssh.MAX_LINE_CHARS`` cap and no longer parse.
+_CONTAINER_FORMAT = "{" + ",".join(f'"{k}":{{{{json .{k}}}}}' for k in CONTAINER_FIELDS) + "}"
+
+
 def status_command(instance: Instance) -> str:
     if instance.build_source == BuildSource.COMPOSE:
         flt = f"label=com.docker.compose.project={instance.compose_project}"
     else:
         flt = f"label=kiln.instance={instance.id}"
-    return f"docker ps -a --filter {q(flt)} --format '{{{{json .}}}}'"
+    return f"docker ps -a --filter {q(flt)} --format {q(_CONTAINER_FORMAT)}"
 
 
 def logs_command(instance: Instance, tail: int = 200) -> str:
@@ -362,10 +387,24 @@ def _container_ids(output: str) -> list[str]:
 
 
 def release_users_command(instance: Instance) -> str:
-    """Prints the project directory of each of the instance's compose containers."""
+    """Prints the project directory of each of the instance's compose containers.
+
+    Fails when docker cannot list them. The ids go through xargs: zsh does not split ``$ids``.
+    """
     fmt = '{{index .Config.Labels "com.docker.compose.project.working_dir"}}'
     flt = q("label=com.docker.compose.project=" + instance.compose_project)
-    return f'ids=$(docker ps -aq --filter {flt}) && {{ [ -z "$ids" ] || docker container inspect -f {q(fmt)} $ids; }}'
+    return (
+        f"ids=$(docker ps -aq --filter {flt}) && "
+        f"{{ [ -z \"$ids\" ] || printf '%s\\n' \"$ids\" | xargs docker container inspect -f {q(fmt)}; }}"
+    )
+
+
+def unpack_command(release_dir: str, upload: str) -> str:
+    """Unpack the uploaded tarball into a new release, then remove the upload either way."""
+    return (
+        f"mkdir -p {q(release_dir)} && tar -xzf {q(upload)} -C {q(release_dir)} --strip-components=1; "
+        f"rc=$?; rm -f {q(upload)}; exit $rc"
+    )
 
 
 def discard_command(instance: Instance, release_dir: str, upload: str) -> str:
@@ -404,6 +443,72 @@ async def destroy(instance: Instance, *, connect: ConnectFactory = ssh.open_sess
     return f"Could not remove {paths.base} on {instance.host.name}; delete it by hand" + (f" ({detail})" if detail else "")
 
 
+# ------------------------------------------------------------------ source archive
+
+
+def guarded_paths(instance: Instance) -> dict[str, tuple[bool, str]]:
+    """Release paths the build resolves, mapped to (must be a directory, description).
+
+    Docker and Compose follow symbolic links in these, so a link would make them build from
+    (or write to) files outside the release. ``-f`` is resolved from the release root, as
+    the build commands run there.
+    """
+    if instance.build_source == BuildSource.COMPOSE:
+        settings = [("compose file", instance.compose_file, False)]
+    else:
+        settings = [("build context", instance.build_context, True), ("Dockerfile", instance.dockerfile_path, False)]
+    guarded: dict[str, tuple[bool, str]] = {}
+    for name, value, is_dir in settings:
+        norm = posixpath.normpath(value or ".")
+        parts = [] if norm == "." else norm.split("/")
+        for i in range(1, len(parts) + 1):
+            path = "/".join(parts[:i])
+            whole = i == len(parts)
+            what = f"the {name} '{norm}'" if whole else f"'{path}' in the {name} path '{norm}'"
+            must_be_dir = is_dir or not whole
+            if path in guarded:
+                must_be_dir = must_be_dir or guarded[path][0]
+                what = guarded[path][1]
+            guarded[path] = (must_be_dir, what)
+    return guarded
+
+
+def _extracted_name(name: str) -> str | None:
+    """Where ``tar --strip-components=1`` puts relative member ``name`` in the release (None: nowhere)."""
+    _, sep, rest = name.partition("/")
+    rest = rest.lstrip("/")
+    return posixpath.normpath(rest) if sep and rest else None
+
+
+def check_source_archive(tarball: Path, guarded: dict[str, tuple[bool, str]]) -> None:
+    """Raise DeployError if a guarded path in the archive is a link (or not a directory as needed).
+
+    Runs on the Kiln server before the upload, naming members the way the host's tar extracts them.
+    """
+    try:
+        with tarfile.open(tarball, "r:gz") as archive:
+            while (member := archive.next()) is not None:
+                archive.members.clear()  # only listing: keep no member list for repositories with many files
+                # GitHub never writes these; tar implementations disagree on where they go.
+                if member.name.startswith("/") or ".." in member.name.split("/"):
+                    raise DeployError(f"The source archive contains the unsafe path {member.name!r}; refusing to deploy")
+                path = _extracted_name(member.name)
+                if path not in guarded:
+                    continue
+                must_be_dir, what = guarded[path]
+                if member.issym():
+                    kind = "a symbolic link"
+                elif member.islnk():
+                    kind = "a hard link"
+                elif must_be_dir and not member.isdir():
+                    kind = "not a directory"
+                else:
+                    continue
+                raise DeployError(f"{what[0].upper()}{what[1:]} is {kind} in the repository; refusing to deploy")
+    except (tarfile.TarError, OSError, EOFError, zlib.error) as exc:
+        raise DeployError(f"The source archive could not be read: {exc}") from exc
+
+
 # ------------------------------------------------------------------------- logging
 
 
@@ -429,10 +534,7 @@ class LogSink:
         self._lock = asyncio.Lock()
 
     async def line(self, text: str) -> None:
-        text = clean_text(text)
-        if len(text) > MAX_LINE_CHARS:
-            text = text[:MAX_LINE_CHARS] + " [line truncated]"
-        entry = f"[{utcnow():%H:%M:%S}] {text}\n"
+        entry = f"[{utcnow():%H:%M:%S}] {ssh.clip_line(clean_text(text))}\n"
         if not self._truncated and self._size + len(entry) <= LOG_HEAD_CHARS:
             self._buf.append(entry)
             self._size += len(entry)
@@ -610,10 +712,7 @@ async def _install(
     await remote.run(f"mkdir -p {q(paths.releases)} {q(paths.shared)}")
     try:
         await remote.put(tarball, upload)
-        await remote.run(
-            f"mkdir -p {q(release)} && tar -xzf {q(upload)} -C {q(release)} --strip-components=1; "
-            f"status=$?; rm -f {q(upload)}; exit $status"
-        )
+        await remote.run(unpack_command(release, upload))
         await sink.line(f"Unpacked release into {release}")
         if instance.build_source == BuildSource.COMPOSE:
             env_path, content = paths.kiln_env_file, render_compose_env(env)
@@ -664,6 +763,7 @@ async def _pipeline(
             tarball = Path(tmp) / "source.tar.gz"
             size = await gh.download_tarball(repo.github_id, commit.sha, tarball)
             await sink.line(f"Downloaded source archive ({size / 1024:.0f} KiB)")
+            await asyncio.to_thread(check_source_archive, tarball, guarded_paths(instance))
 
             await sink.line(f"Connecting to {host.username}@{host.address}")
             async with connect(ssh.SSHTarget.from_host(host)) as remote:

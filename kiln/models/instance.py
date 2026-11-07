@@ -49,7 +49,7 @@ class Instance(UUIDPrimaryKey, Timestamps, Base):
     slug: Mapped[str] = mapped_column(String(63), unique=True)
     repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id", ondelete="RESTRICT"))
     host_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("hosts.id", ondelete="RESTRICT"))
-    branch: Mapped[str] = mapped_column(String(100))
+    branch: Mapped[str] = mapped_column(String(255))
 
     build_source: Mapped[str] = mapped_column(String(16), default=BuildSource.DOCKERFILE)
     dockerfile_path: Mapped[str] = mapped_column(String(255), default="Dockerfile")
@@ -82,7 +82,7 @@ class Deployment(UUIDPrimaryKey, Timestamps, Base):
 
     instance_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("instances.id", ondelete="CASCADE"), index=True)
     status: Mapped[str] = mapped_column(String(16), default=DeploymentStatus.QUEUED, index=True)
-    branch: Mapped[str] = mapped_column(String(100))
+    branch: Mapped[str] = mapped_column(String(255))
     commit_sha: Mapped[str | None] = mapped_column(String(40))
     commit_message: Mapped[str | None] = mapped_column(String(500))
     commit_author: Mapped[str | None] = mapped_column(String(100))

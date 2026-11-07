@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -10,7 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from kiln.core.config import get_settings
 from kiln.db.base import utcnow
 from kiln.models import Repository, User
+from kiln.models.repository import DEFAULT_BRANCH_TOO_LONG
 from kiln.services.github import GitHubClient, RepoRef, _parse_dt, detect_many
+
+log = logging.getLogger(__name__)
+BRANCH_MAX = Repository.__table__.c.default_branch.type.length
 
 
 class GitHubNotLinked(RuntimeError):
@@ -68,14 +73,35 @@ async def sync_repositories(db: AsyncSession, user: User, *, client: GitHubClien
                 created += 1
             else:
                 updated += 1
-            changed = repo.pushed_at != pushed_at or repo.detected_at is None
-            # Clip to the column widths: PostgreSQL rejects over-long VARCHAR values.
+            branch = data.get("default_branch") or "main"
+            changed = (
+                repo.pushed_at != pushed_at
+                or repo.detected_at is None
+                or repo.default_branch != branch
+                or not repo.default_branch_usable
+            )
+            # Clip display text to the column widths: PostgreSQL rejects over-long VARCHAR values.
             repo.full_name = data["full_name"][:200]
             repo.owner = data["owner"]["login"][:100]
             repo.name = data["name"][:100]
             repo.description = data.get("description") or ""
             repo.visibility = (data.get("visibility") or ("private" if data.get("private") else "public"))[:16]
-            repo.default_branch = (data.get("default_branch") or "main")[:100]
+            # A branch name is an identifier: cutting it would name a different branch, so it is never cut.
+            usable = len(branch) <= BRANCH_MAX
+            if usable:
+                repo.default_branch = branch
+                if not repo.default_branch_usable:
+                    repo.detected_config = {
+                        k: v for k, v in repo.detected_config.items() if k != DEFAULT_BRANCH_TOO_LONG
+                    }
+            else:
+                repo.default_branch = repo.default_branch or "main"
+                repo.detected_config = {**(repo.detected_config or {}), DEFAULT_BRANCH_TOO_LONG: True}
+                log.warning(
+                    "The default branch of %s is longer than %d characters; keeping %r and skipping detection. "
+                    "Instances of it need an explicit branch.",
+                    repo.full_name, BRANCH_MAX, repo.default_branch,
+                )
             repo.html_url = data["html_url"][:300]
             repo.language = (data.get("language") or "")[:50] or None
             repo.archived = bool(data.get("archived"))
@@ -83,7 +109,7 @@ async def sync_repositories(db: AsyncSession, user: User, *, client: GitHubClien
             repo.synced_at = now
             repo.synced_by_id = user.id
             by_id[repo.github_id] = repo
-            if changed and not repo.archived:
+            if changed and usable and not repo.archived:
                 needs_detection.append((repo.github_id, repo.default_branch))
 
         for github_id, config in (await detect_many(client, needs_detection)).items():

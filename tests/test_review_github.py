@@ -529,7 +529,7 @@ async def test_sync_fits_repository_columns():
         async with _client(handler) as gh:
             await sync_repositories(db, user, client=gh)
         repo = await db.scalar(select(Repository))
-    assert len(repo.default_branch) == 100 and len(repo.language) == 50 and len(repo.visibility) == 16
+    assert repo.default_branch == "b" * 150 and len(repo.language) == 50 and len(repo.visibility) == 16
 
 
 # ------------------------------------------------- codeload token in logs (30)
