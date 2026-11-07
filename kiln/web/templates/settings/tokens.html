@@ -1,0 +1,37 @@
+{% extends "settings/_layout.html" %}
+{% from "_macros.html" import icon, empty %}
+{% block title %}API tokens{% endblock %}
+{% block settings %}
+<section class="card">
+  <div class="card-head"><span class="head-icon">{{ icon("key", "i-lg") }}</span>
+    <div><h2>Personal API tokens</h2><p>Use with <code>Authorization: Bearer &lt;token&gt;</code> for scripts and CI. Tokens act with your permissions.</p></div>
+    <span class="spacer"></span><button class="btn btn-primary" data-open="new-token">{{ icon("plus") }} New token</button></div>
+  {% if tokens %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Name</th><th>Token</th><th>Created</th><th>Last used</th><th>Expires</th><th></th></tr></thead>
+    <tbody>{% for t in tokens %}
+      <tr><td><strong>{{ t.name }}</strong></td><td class="mono subtle">{{ t.prefix }}…</td><td class="muted">{{ t.created_at|timeago }}</td>
+        <td class="muted">{{ t.last_used_at|timeago }}</td><td class="muted">{{ t.expires_at|dt if t.expires_at else "Never" }}</td>
+        <td class="actions-cell"><button class="btn btn-sm btn-danger" data-api="DELETE /api/v1/tokens/{{ t.id }}" data-confirm="Revoke {{ t.name }}? Anything using it stops working." data-then="reload">Revoke</button></td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}
+    {{ empty("key", "No tokens", "Create a token to call the Kiln API from scripts, CI pipelines or the CLI.") }}
+  {% endif %}
+</section>
+
+<dialog class="modal" id="new-token">
+  <form data-form="POST /api/v1/tokens" data-result-field="token" data-result-target="#token-value">
+    <div class="modal-head"><h2>New API token</h2><button class="icon-btn" type="button" data-close aria-label="Close">{{ icon("x") }}</button></div>
+    <div class="modal-body">
+      <div class="field"><label for="tok-name">Name</label><input class="input" id="tok-name" name="name" placeholder="GitHub Actions" required></div>
+      <div class="field"><label for="tok-exp">Expires in (days)</label><input class="input" id="tok-exp" name="expires_in_days" type="number" min="1" max="3650" placeholder="Never"></div>
+      <div data-result hidden class="stack" style="gap: 8px">
+        <div class="callout success">{{ icon("check") }}<span>Copy this token now. It won't be shown again.</span></div>
+        <div class="copy-row"><pre class="code" id="token-value"></pre><button class="btn" type="button" data-copy-target="#token-value">{{ icon("copy") }}</button></div>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn" type="button" data-reload-page>Done</button><button class="btn btn-primary" type="submit">Create token</button></div>
+  </form>
+</dialog>
+{% endblock %}

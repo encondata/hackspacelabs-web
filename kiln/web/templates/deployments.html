@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, badge, empty %}
+{% block title %}Deployments{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Deployments</h1>
+    <p class="lede">Every build and release Kiln has run, newest first.</p>
+  </div>
+  <nav class="segmented" aria-label="Filter by status">
+    {% for key, label in [("", "All"), ("running", "Building"), ("succeeded", "Deployed"), ("failed", "Failed")] %}
+    <a href="/deployments{% if key %}?status={{ key }}{% endif %}" class="{{ 'active' if status == key }}">{{ label }}</a>
+    {% endfor %}
+  </nav>
+</div>
+
+<section class="card">
+  {% if deployments %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Instance</th><th>Status</th><th>Commit</th><th>Host</th><th>Triggered by</th><th>Started</th><th>Duration</th><th></th></tr></thead>
+    <tbody>
+    {% for d in deployments %}
+      <tr>
+        <td><a href="/instances/{{ d.instance.id }}"><strong>{{ d.instance.name }}</strong></a><div class="subtle">{{ d.instance.repository.full_name }}</div></td>
+        <td>{{ badge("deployment", d.status) }}</td>
+        <td><span class="chip">{{ icon("branch", "i-sm") }} {{ d.branch }}</span> <span class="mono subtle">{{ d.short_sha }}</span><div class="subtle truncate" style="max-width: 300px">{{ d.commit_message or "" }}</div></td>
+        <td class="muted">{{ d.instance.host.name }}</td>
+        <td class="muted">{{ d.triggered_by.display_name if d.triggered_by else "—" }}</td>
+        <td class="muted nowrap" title="{{ d.created_at|dt }}">{{ d.created_at|timeago }}</td>
+        <td class="muted">{{ d.duration_seconds|duration }}</td>
+        <td class="actions-cell"><a class="btn btn-sm" href="/deployments/{{ d.id }}">View log</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+    {{ empty("rocket", "No deployments" ~ (" with this status" if status else " yet"), "Deploy an instance and its build output will show up here.", "/instances/new" if auth.can(Perm.INSTANCES_WRITE) and not status else None, "Create instance") }}
+  {% endif %}
+</section>
+{% endblock %}

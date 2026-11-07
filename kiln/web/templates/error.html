@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, flame %}
+{% block title %}{{ code }}{% endblock %}
+{% block body %}
+{% if user %}{{ super() }}{% else %}
+<div class="auth-page"><div class="card auth-card" style="text-align:center">
+  <a class="brand" href="/">{{ flame() }}<span>Kiln</span></a>
+  <h1>{{ code }}</h1><p class="muted">{{ message }}</p>
+  <a class="btn btn-primary" href="/">Go home</a>
+</div></div>
+{% endif %}
+{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="empty">
+    <div class="empty-icon">{{ icon("lock" if code == 403 else "search") }}</div>
+    <h2>{{ "Access denied" if code == 403 else "Not found" }}</h2>
+    <p>{{ message }}</p>
+    <a class="btn" href="/">{{ icon("home") }} Back to overview</a>
+  </div>
+</section>
+{% endblock %}

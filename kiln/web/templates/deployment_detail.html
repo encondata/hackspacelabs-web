@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, badge %}
+{% block title %}Deployment {{ dep.short_sha or dep.id|string|truncate(8, True, "") }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="breadcrumb"><a href="/deployments">Deployments</a>{{ icon("chevron-right", "i-sm") }}<a href="/instances/{{ dep.instance.id }}">{{ dep.instance.name }}</a></div>
+    <h1 class="row">{{ dep.instance.name }} {{ badge("deployment", dep.status) }}</h1>
+    <p class="lede">{{ dep.instance.repository.full_name }} · <span class="mono">{{ dep.branch }}</span> → {{ dep.instance.host.name }}</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/instances/{{ dep.instance.id }}">{{ icon("box") }} Open instance</a>
+    {% if auth.can(Perm.DEPLOYMENTS_CREATE) and not dep.is_active %}
+    <button class="btn btn-primary" data-api="POST /api/v1/instances/{{ dep.instance.id }}/deploy" data-then="redirect:/deployments/{id}">{{ icon("restart") }} Redeploy</button>
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid grid-4">
+  <div class="card stat"><div class="label">{{ icon("commit") }} Commit</div><div class="value mono" style="font-size: 22px">{{ dep.short_sha or "—" }}</div><div class="hint truncate">{{ dep.commit_message or ("Resolving…" if dep.is_active else "Not resolved") }}</div></div>
+  <div class="card stat"><div class="label">{{ icon("user") }} Triggered by</div><div class="value" style="font-size: 22px">{{ dep.triggered_by.display_name if dep.triggered_by else "—" }}</div><div class="hint">{{ dep.created_at|dt }}</div></div>
+  <div class="card stat"><div class="label">{{ icon("clock") }} Duration</div><div class="value" style="font-size: 22px">{{ dep.duration_seconds|duration }}</div><div class="hint">{% if dep.finished_at %}Finished {{ dep.finished_at|timeago }}{% else %}In progress{% endif %}</div></div>
+  <div class="card stat"><div class="label">{{ icon("instances") }} Build</div><div class="value" style="font-size: 22px">{{ "Compose" if dep.instance.build_source == "compose" else "Dockerfile" }}</div><div class="hint mono">{{ dep.instance.compose_file if dep.instance.build_source == "compose" else dep.instance.dockerfile_path }}</div></div>
+</div>
+
+{% if dep.error %}<div class="callout error">{{ icon("alert") }}<pre class="mono" style="margin:0; white-space: pre-wrap">{{ dep.error }}</pre></div>{% endif %}
+
+<section class="card">
+  <div class="card-head"><span class="head-icon">{{ icon("terminal", "i-lg") }}</span><div><h2>Build output</h2><p>{{ "Streaming live…" if dep.is_active else "Complete log" }}</p></div>
+    <span class="spacer"></span><button class="btn btn-sm" data-copy-target="#deploy-log">{{ icon("copy", "i-sm") }} Copy</button></div>
+  <div class="card-body">
+    <pre class="log" id="deploy-log" data-deploy-log="/api/v1/deployments/{{ dep.id }}" data-initial-status="{{ dep.status }}" {% if dep.is_active %}data-reload-on-finish{% endif %}></pre>
+  </div>
+</section>
+{% endblock %}

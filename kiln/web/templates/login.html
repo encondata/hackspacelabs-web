@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, flame, mountains %}
+{% block title %}Sign in{% endblock %}
+{% block body %}
+<div class="auth-page">
+  {{ mountains("0 160 1200 460") }}
+  <div class="card auth-card">
+    <a class="brand" href="/">{{ flame() }}<span>Kiln</span></a>
+    <h1>Sign in to Kiln</h1>
+    <p class="lede">Deploy. Run. Observe.</p>
+
+    {% if error %}<div class="callout error">{{ icon("alert") }}<span>{{ error }}</span></div>{% endif %}
+
+    {% if settings.github_enabled %}
+    <a class="btn btn-github btn-lg btn-block" href="/auth/github/login?next={{ next|urlencode }}">{{ icon("github") }} Continue with GitHub</a>
+    <div class="divider">or sign in with email</div>
+    {% endif %}
+
+    <form id="login-form" data-form="POST /api/v1/auth/login" data-then="redirect:{{ next if next.startswith('/') and not next.startswith('//') else '/' }}" class="stack" style="gap: 14px">
+      <div class="field">
+        <label for="email">Email</label>
+        <input class="input" id="email" name="email" type="email" autocomplete="username" required autofocus>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input class="input" id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn btn-primary btn-lg btn-block" type="submit">Sign in</button>
+    </form>
+
+    {% if no_users %}
+    <div class="callout primary">{{ icon("info") }}
+      <span>No accounts exist yet. Create the first admin with
+        <code>kiln create-admin you@example.com</code>, set <code>KILN_ADMIN_EMAIL</code> / <code>KILN_ADMIN_PASSWORD</code>,
+        {% if settings.github_enabled %}or simply continue with GitHub (the first account becomes admin).{% else %}then restart.{% endif %}
+      </span>
+    </div>
+    {% elif settings.allow_signup %}
+    <p class="subtle" style="text-align:center">Self-registration is enabled: <code>POST /api/v1/auth/register</code></p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

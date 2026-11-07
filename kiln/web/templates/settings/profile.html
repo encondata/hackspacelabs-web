@@ -1,0 +1,55 @@
+{% extends "settings/_layout.html" %}
+{% from "_macros.html" import icon, avatar %}
+{% block title %}Profile{% endblock %}
+{% block settings %}
+{% if error %}<div class="callout error">{{ icon("alert") }}<span>{{ error }}</span></div>{% endif %}
+{% if linked %}<div class="callout success">{{ icon("check") }}<span>GitHub account linked. You can now sync repositories.</span></div>{% endif %}
+
+<div class="grid grid-2">
+  <section class="card">
+    <div class="card-head"><span class="head-icon">{{ icon("user", "i-lg") }}</span><div><h2>Profile</h2><p>{{ user.email }}</p></div></div>
+    <form class="card-body stack" style="gap: 16px" data-form="PATCH /api/v1/auth/me" data-then="reload" data-success="Profile saved">
+      <div class="row">{{ avatar(user) }}<div><strong>{{ user.display_name }}</strong><div class="subtle">Roles: {{ user.role_names|join(", ") or "none" }}</div></div></div>
+      <div class="field"><label for="full_name">Display name</label><input class="input" id="full_name" name="full_name" value="{{ user.full_name }}" data-keep-empty></div>
+      <div><button class="btn btn-primary" type="submit">Save</button></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><span class="head-icon">{{ icon("github", "i-lg") }}</span><div><h2>GitHub</h2><p>Used to sign in, list repositories and download source for deploys.</p></div></div>
+    <div class="card-body stack" style="gap: 14px">
+      {% if user.github %}
+        <div class="row"><span class="badge success">Connected</span> <strong>@{{ user.github.login }}</strong></div>
+        <div class="subtle">Scopes: <span class="mono">{{ user.github.scopes or "—" }}</span></div>
+        <div class="row wrap">
+          <a class="btn" href="/auth/github/link">{{ icon("sync") }} Re-authorize</a>
+          <button class="btn btn-danger" data-api="DELETE /api/v1/auth/me/github" data-confirm="Unlink GitHub from your Kiln account?" data-then="reload">Unlink</button>
+        </div>
+      {% elif settings.github_enabled %}
+        <p class="muted">Not connected.</p>
+        <div><a class="btn btn-github" href="/auth/github/link">{{ icon("github") }} Connect GitHub</a></div>
+      {% else %}
+        <div class="callout">{{ icon("info") }}<div>GitHub isn't configured for this Kiln. Create an OAuth App at
+          <span class="mono">github.com/settings/developers</span> with callback URL
+          <code>{{ settings.github_callback_url }}</code>, then set <code>KILN_GITHUB_CLIENT_ID</code> and <code>KILN_GITHUB_CLIENT_SECRET</code>.</div></div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><span class="head-icon">{{ icon("lock", "i-lg") }}</span><div><h2>{{ "Change password" if user.password_hash else "Set a password" }}</h2><p>Changing it signs out your other sessions.</p></div></div>
+    <form class="card-body stack" style="gap: 16px" data-form="POST /api/v1/auth/me/password" data-then="reload" data-success="Password updated">
+      {% if user.password_hash %}<div class="field"><label for="cur">Current password</label><input class="input" id="cur" name="current_password" type="password" autocomplete="current-password" required></div>{% endif %}
+      <div class="field"><label for="new">New password</label><input class="input" id="new" name="new_password" type="password" autocomplete="new-password" minlength="10" required><span class="help">At least 10 characters.</span></div>
+      <div><button class="btn btn-primary" type="submit">Update password</button></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><span class="head-icon">{{ icon("shield", "i-lg") }}</span><div><h2>Your permissions</h2><p>Granted by your roles.</p></div></div>
+    <div class="card-body row wrap">
+      {% for p in user.permissions|sort %}<span class="chip mono">{{ p }}</span>{% else %}<span class="muted">None</span>{% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,127 @@
+"""Application settings, read from environment variables (prefix ``KILN_``) or ``.env``."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import logging
+import os
+from functools import lru_cache
+from typing import Annotated, Literal
+
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+log = logging.getLogger(__name__)
+
+DEV_SECRET = "dev-insecure-secret-change-me"
+
+CommaList = Annotated[list[str], NoDecode]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="KILN_",
+        # KILN_ENV_FILE="" disables .env loading (the test suite does this).
+        env_file=os.environ.get("KILN_ENV_FILE", ".env") or None,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    env: Literal["development", "production", "test"] = "development"
+    base_url: str = "http://localhost:8000"
+    log_level: str = "INFO"
+
+    # Signs nothing user-visible today but is the root secret for derived keys.
+    secret_key: str = DEV_SECRET
+    # Fernet key(s) used to encrypt SSH keys, passwords, env vars and OAuth tokens at rest.
+    # Comma-separate several keys to rotate: the first encrypts, all are tried for decryption.
+    encryption_key: str = ""
+
+    database_url: str = "postgresql+asyncpg://kiln:kiln@localhost:5432/kiln"
+    database_echo: bool = False
+
+    session_ttl_hours: int = 24 * 14
+    allow_signup: bool = False
+    default_role: str = "viewer"
+
+    # Optional first-run admin. Created on startup only when the users table is empty.
+    admin_email: str | None = None
+    admin_password: str | None = None
+
+    github_client_id: str | None = None
+    github_client_secret: str | None = None
+    github_scopes: str = "read:user user:email repo"
+    # GitHub logins / orgs allowed to create a Kiln account on first sign-in.
+    github_allowed_users: CommaList = Field(default_factory=list)
+    github_allowed_orgs: CommaList = Field(default_factory=list)
+    # Optional machine token (PAT or GitHub App installation token) used for deploys
+    # when the user triggering the deploy has not linked GitHub.
+    github_service_token: str | None = None
+    github_api_url: str = "https://api.github.com"
+    github_web_url: str = "https://github.com"
+
+    host_poll_interval: int = 300  # seconds; 0 disables background host health checks
+    default_deploy_root: str = "/opt/kiln"
+    ssh_connect_timeout: int = 15
+
+    @field_validator("github_allowed_users", "github_allowed_orgs", mode="before")
+    @classmethod
+    def _split_commas(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [v.strip().lower() for v in value.split(",") if v.strip()]
+        return value
+
+    @field_validator("base_url")
+    @classmethod
+    def _strip_slash(cls, value: str) -> str:
+        return value.rstrip("/")
+
+    @model_validator(mode="after")
+    def _check_production(self) -> Settings:
+        if self.env == "production":
+            if self.secret_key == DEV_SECRET or len(self.secret_key) < 32:
+                raise ValueError("KILN_SECRET_KEY must be set to a random value of 32+ characters")
+            if not self.encryption_key:
+                raise ValueError(
+                    "KILN_ENCRYPTION_KEY must be set in production (run `kiln generate-secrets`)"
+                )
+        return self
+
+    @property
+    def is_production(self) -> bool:
+        return self.env == "production"
+
+    @property
+    def secure_cookies(self) -> bool:
+        return self.base_url.startswith("https://")
+
+    @property
+    def github_enabled(self) -> bool:
+        return bool(self.github_client_id and self.github_client_secret)
+
+    @property
+    def github_callback_url(self) -> str:
+        return f"{self.base_url}/auth/github/callback"
+
+    @property
+    def oauth_scopes(self) -> str:
+        scopes = self.github_scopes.split()
+        if self.github_allowed_orgs and "read:org" not in scopes:
+            scopes.append("read:org")
+        return " ".join(scopes)
+
+    def fernet_keys(self) -> list[bytes]:
+        if self.encryption_key:
+            return [k.strip().encode() for k in self.encryption_key.split(",") if k.strip()]
+        # Development fallback: derive a stable key from the secret key.
+        digest = hashlib.sha256(f"kiln-encryption:{self.secret_key}".encode()).digest()
+        return [base64.urlsafe_b64encode(digest)]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    settings = Settings()
+    if not settings.encryption_key and not settings.is_production:
+        log.warning("KILN_ENCRYPTION_KEY not set; deriving one from KILN_SECRET_KEY (dev only)")
+    return settings

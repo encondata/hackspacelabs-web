@@ -1,0 +1,91 @@
+"""Test fixtures. Tests run against SQLite; set KILN_TEST_DATABASE_URL to use PostgreSQL."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from collections.abc import AsyncIterator, Callable
+from pathlib import Path
+
+_tmp = Path(tempfile.mkdtemp(prefix="kiln-tests-"))
+os.environ.update(
+    KILN_ENV_FILE="",  # never read the developer's .env
+    KILN_ENV="test",
+    KILN_DATABASE_URL=os.environ.get("KILN_TEST_DATABASE_URL", f"sqlite+aiosqlite:///{_tmp}/test.db"),
+    KILN_SECRET_KEY="test-secret-key-that-is-long-enough-1234567890",
+    KILN_HOST_POLL_INTERVAL="0",
+    KILN_GITHUB_CLIENT_ID="test-client",
+    KILN_GITHUB_CLIENT_SECRET="test-secret",
+    KILN_BASE_URL="http://testserver",
+    KILN_ALLOW_SIGNUP="false",
+)
+
+import httpx  # noqa: E402
+import pytest  # noqa: E402
+
+from kiln.core.ratelimit import login_limiter  # noqa: E402
+from kiln.db.base import Base  # noqa: E402
+from kiln.db.session import get_engine, get_sessionmaker, init_engine  # noqa: E402
+from kiln.main import create_app  # noqa: E402
+from kiln.models import User  # noqa: E402
+from kiln.services.users import bootstrap, create_user  # noqa: E402
+
+PASSWORD = "correct-horse-battery"
+
+
+@pytest.fixture(scope="session")
+def app():
+    init_engine(os.environ["KILN_DATABASE_URL"])
+    return create_app()
+
+
+@pytest.fixture(autouse=True)
+async def fresh_db(app) -> AsyncIterator[None]:
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    async with get_sessionmaker()() as db:
+        await bootstrap(db)
+    login_limiter._hits.clear()
+    yield
+
+
+@pytest.fixture
+def make_client(app) -> Callable[[], httpx.AsyncClient]:
+    clients: list[httpx.AsyncClient] = []
+
+    def factory() -> httpx.AsyncClient:
+        c = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
+        clients.append(c)
+        return c
+
+    yield factory
+    # httpx clients over ASGITransport hold no sockets; nothing to close explicitly.
+
+
+@pytest.fixture
+async def client(make_client) -> httpx.AsyncClient:
+    return make_client()
+
+
+async def make_user(email: str, roles: list[str] | None = None, password: str = PASSWORD) -> User:
+    async with get_sessionmaker()() as db:
+        user = await create_user(db, email=email, password=password, full_name=email.split("@")[0], role_names=roles)
+        await db.commit()
+        return user
+
+
+async def login(client: httpx.AsyncClient, email: str, password: str = PASSWORD) -> dict:
+    resp = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    client.headers["X-CSRF-Token"] = data["csrf_token"]
+    return data
+
+
+@pytest.fixture
+async def admin_client(client) -> httpx.AsyncClient:
+    await make_user("admin@example.com")  # first user -> admin
+    await login(client, "admin@example.com")
+    return client

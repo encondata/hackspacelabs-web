@@ -1,0 +1,34 @@
+# Kiln + PostgreSQL. Usage:
+#   cp .env.example .env   # then fill in secrets (kiln generate-secrets) and GitHub OAuth app
+#   docker compose up -d --build
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kiln
+      POSTGRES_USER: kiln
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kiln}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kiln -d kiln"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kiln:
+    build: .
+    image: kiln:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      KILN_DATABASE_URL: postgresql+asyncpg://kiln:${POSTGRES_PASSWORD:-kiln}@db:5432/kiln
+    ports:
+      - "${KILN_PORT:-8000}:8000"
+
+volumes:
+  pgdata:
