@@ -10,17 +10,17 @@ import pytest
 from asyncssh.connection import SSHServerConnection
 from sqlalchemy import event, inspect, select, text, update
 
-from kiln.core.config import get_settings
-from kiln.db.session import get_engine, get_sessionmaker
-from kiln.models import Host, HostAuthMethod, Instance, Repository
-from kiln.services import hosts, ssh
+from slipway.core.config import get_settings
+from slipway.db.session import get_engine, get_sessionmaker
+from slipway.models import Host, HostAuthMethod, Instance, Repository
+from slipway.services import hosts, ssh
 
 WARNING = "WARNING: Error loading config file: /home/deploy/.docker/config.json: open /home/deploy/.docker/config.json: permission denied"
 
 
 def _probe_output(docker: str = "27.3.1\nrc=0", os_info: str = "Ubuntu 24.04 LTS", load: str = "1.00 0.50 0.25 1/200 1234",
                   meminfo: str = "MemTotal:        8000000 kB\nMemAvailable:    6000000 kB", nproc: str = "4", containers: str = "3") -> str:
-    sep = "\n::kiln::\n"
+    sep = "\n::slipway::\n"
     return sep.join([os_info, nproc, load, meminfo, docker, containers]) + "\n"
 
 
@@ -54,7 +54,7 @@ async def _emulate_postgres_lengths() -> None:
 async def _add_pinned_host(name: str, host_key: str, **kw) -> Host:
     async with get_sessionmaker()() as db:
         host = Host(name=name, hostname=kw.pop("hostname", f"{name}.example"), port=kw.pop("port", 22), username="deploy",
-                    deploy_root="/opt/kiln", metrics={}, auth_method="password", password="pw", host_key=host_key,
+                    deploy_root="/opt/slipway", metrics={}, auth_method="password", password="pw", host_key=host_key,
                     host_key_fingerprint=ssh.fingerprint(host_key) if host_key else None, **kw)
         db.add(host)
         await db.commit()
@@ -419,15 +419,15 @@ async def test_deploy_root_change_refused_once_an_instance_was_deployed(admin_cl
     r = await admin_client.post("/api/v1/instances", json={"name": "web", "repository_id": repo_id, "host_id": host["id"], "deploy": False})
     assert r.status_code == 201, r.text
     url = f"/api/v1/hosts/{host['id']}"
-    assert (await admin_client.patch(url, json={"deploy_root": "/srv/kiln"})).json()["deploy_root"] == "/srv/kiln"
+    assert (await admin_client.patch(url, json={"deploy_root": "/srv/slipway"})).json()["deploy_root"] == "/srv/slipway"
 
     async with get_sessionmaker()() as db:
         await db.execute(update(Instance).values(status="failed"))  # a deploy ran and may have left files behind
         await db.commit()
-    r = await admin_client.patch(url, json={"deploy_root": "/opt/kiln"})
+    r = await admin_client.patch(url, json={"deploy_root": "/opt/slipway"})
     assert r.status_code == 400 and "deploy root" in r.json()["detail"]
-    assert (await admin_client.get(url)).json()["deploy_root"] == "/srv/kiln"
-    assert (await admin_client.patch(url, json={"deploy_root": "/srv/kiln/", "description": "x"})).status_code == 200
+    assert (await admin_client.get(url)).json()["deploy_root"] == "/srv/slipway"
+    assert (await admin_client.patch(url, json={"deploy_root": "/srv/slipway/", "description": "x"})).status_code == 200
 
 
 async def test_address_change_clears_pinned_key_and_is_audited(admin_client, monkeypatch):

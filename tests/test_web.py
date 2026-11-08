@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from kiln.services import deployer, hosts, ssh
-from kiln.db.session import get_sessionmaker
-from kiln.models import Repository
+from slipway.services import deployer, hosts, ssh
+from slipway.db.session import get_sessionmaker
+from slipway.models import Repository
 from tests.conftest import login, make_user
 
 
@@ -15,6 +15,19 @@ async def test_anonymous_pages_redirect_to_login(client):
     assert r.status_code == 302 and r.headers["location"] == "/login?next=/hosts"
     r = await client.get("/login")
     assert r.status_code == 200 and "Continue with GitHub" in r.text
+
+
+async def test_favicon_ico_redirects_to_the_svg_icon(client):
+    r = await client.get("/favicon.ico")
+    assert r.status_code == 301 and r.headers["location"] == "/static/img/favicon.svg"
+    icon = await client.get("/static/img/favicon.svg")
+    assert icon.status_code == 200 and icon.headers["content-type"].startswith("image/svg+xml")
+
+
+def test_asyncssh_connection_chatter_is_kept_out_of_info_logs(app):
+    import logging
+
+    assert logging.getLogger("asyncssh").getEffectiveLevel() == logging.WARNING
 
 
 async def _seed_repo() -> str:
@@ -42,7 +55,7 @@ async def test_every_page_renders_for_admin(admin_client, monkeypatch):
     for page in pages:
         r = await admin_client.get(page)
         assert r.status_code == 200, f"{page}: {r.status_code}\n{r.text[:2000]}"
-        assert "Kiln" in r.text
+        assert "Slipway" in r.text
     assert "ssh-ed25519" in (await admin_client.get(f"/hosts/{host['id']}")).text
     assert (await admin_client.get("/hosts/00000000-0000-0000-0000-000000000000")).status_code == 404
 

@@ -1,4 +1,4 @@
-"""Alembic environment (async). Uses KILN_DATABASE_URL via Kiln's settings."""
+"""Alembic environment (async). Uses SLIPWAY_DATABASE_URL via Slipway's settings."""
 
 import asyncio
 from logging.config import fileConfig
@@ -9,9 +9,9 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.types import TypeDecorator
 
-import kiln.models  # noqa: F401  (registers every table on Base.metadata)
-from kiln.core.config import get_settings
-from kiln.db.base import Base
+import slipway.models  # noqa: F401  (registers every table on Base.metadata)
+from slipway.core.config import get_settings
+from slipway.db.base import Base
 
 config = context.config
 if config.config_file_name is not None:
@@ -22,7 +22,7 @@ URL = config.get_main_option("sqlalchemy.url") or get_settings().database_url
 
 
 def render_item(type_: str, obj: object, autogen_context: object) -> str | Literal[False]:
-    """Render Kiln's TypeDecorators (encrypted text, UTC datetimes) as their plain SQL types,
+    """Render Slipway's TypeDecorators (encrypted text, UTC datetimes) as their plain SQL types,
     so migrations never import application code."""
     if type_ == "type" and isinstance(obj, TypeDecorator):
         return f"sa.{obj.impl!r}"

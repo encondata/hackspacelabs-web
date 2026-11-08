@@ -14,9 +14,9 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import func, select
 
-from kiln.core import ratelimit, security
-from kiln.core.config import get_settings
-from kiln.core.ratelimit import (
+from slipway.core import ratelimit, security
+from slipway.core.config import get_settings
+from slipway.core.ratelimit import (
     RateLimiter,
     ip_bucket,
     login_email_limiter,
@@ -25,13 +25,13 @@ from kiln.core.ratelimit import (
     password_change_limiter,
     password_change_user_limiter,
 )
-from kiln.db.base import utcnow
-from kiln.db.session import get_engine, get_sessionmaker
-from kiln.models import OAuthAccount, Role, User
-from kiln.services import users as users_service
-from kiln.services.audit import client_ip
-from kiln.services.auth import SESSION_COOKIE, create_session
-from kiln.services.users import bootstrap, create_user, ensure_not_last_admin
+from slipway.db.base import utcnow
+from slipway.db.session import get_engine, get_sessionmaker
+from slipway.models import OAuthAccount, Role, User
+from slipway.services import users as users_service
+from slipway.services.audit import client_ip
+from slipway.services.auth import SESSION_COOKIE, create_session
+from slipway.services.users import bootstrap, create_user, ensure_not_last_admin
 from tests.conftest import PASSWORD, login, make_user
 
 USER_MANAGER = {"name": "user-manager", "permissions": ["users:read", "users:write"]}
@@ -566,7 +566,7 @@ async def test_non_ascii_csrf_header_is_rejected_not_crashed(admin_client):
 
 
 async def test_non_ascii_bearer_token_is_rejected(client):
-    r = await client.get("/api/v1/auth/me", headers={"Authorization": b"Bearer kiln_pat_\xe9\xff"})
+    r = await client.get("/api/v1/auth/me", headers={"Authorization": b"Bearer slipway_pat_\xe9\xff"})
     assert r.status_code == 401
 
 
@@ -644,7 +644,7 @@ async def test_short_admin_password_does_not_crash_startup(monkeypatch, caplog):
     async with get_sessionmaker()() as db:
         assert await db.scalar(select(func.count()).select_from(User)) == 0
         assert await db.scalar(select(func.count()).select_from(Role)) == 4
-    assert "KILN_ADMIN_PASSWORD" in caplog.text
+    assert "SLIPWAY_ADMIN_PASSWORD" in caplog.text
 
 
 async def test_missing_default_role_is_logged(monkeypatch, caplog):
@@ -652,7 +652,7 @@ async def test_missing_default_role_is_logged(monkeypatch, caplog):
     with caplog.at_level(logging.ERROR, logger=users_service.log.name):
         async with get_sessionmaker()() as db:
             await bootstrap(db)
-    assert "KILN_DEFAULT_ROLE=deployers" in caplog.text
+    assert "SLIPWAY_DEFAULT_ROLE=deployers" in caplog.text
 
 
 # ------------------------------------------------------------------------ default role
@@ -662,6 +662,6 @@ async def test_default_role_cannot_be_deleted(admin_client, monkeypatch):
     role = (await admin_client.post("/api/v1/roles", json={"name": "newbie", "permissions": ["repos:read"]})).json()
     monkeypatch.setattr(get_settings(), "default_role", "newbie")
     r = await admin_client.delete(f"/api/v1/roles/{role['id']}")
-    assert r.status_code == 400 and "KILN_DEFAULT_ROLE" in r.json()["detail"]
+    assert r.status_code == 400 and "SLIPWAY_DEFAULT_ROLE" in r.json()["detail"]
     monkeypatch.setattr(get_settings(), "default_role", "viewer")
     assert (await admin_client.delete(f"/api/v1/roles/{role['id']}")).status_code == 204

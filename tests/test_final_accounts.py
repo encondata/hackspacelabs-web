@@ -1,5 +1,5 @@
 """Regression tests for the final accounts review: GitHub links as credentials (12) and the
-KILN_ADMIN_EMAIL first-admin seat (13), plus the fix-up round (the stale-session link page, and
+SLIPWAY_ADMIN_EMAIL first-admin seat (13), plus the fix-up round (the stale-session link page, and
 reactivating an account that deactivation left with no way to sign in)."""
 
 from __future__ import annotations
@@ -12,15 +12,15 @@ import httpx
 import pytest
 from sqlalchemy import func, select
 
-from kiln import cli
-from kiln.core.config import get_settings
-from kiln.db.base import utcnow
-from kiln.db.session import get_sessionmaker
-from kiln.models import OAuthAccount, User
-from kiln.services import users as users_service
-from kiln.services.auth import SESSION_COOKIE, create_session
-from kiln.services.users import UserError, bootstrap, create_user, get_user_by_email
-from kiln.web import oauth
+from slipway import cli
+from slipway.core.config import get_settings
+from slipway.db.base import utcnow
+from slipway.db.session import get_sessionmaker
+from slipway.models import OAuthAccount, User
+from slipway.services import users as users_service
+from slipway.services.auth import SESSION_COOKIE, create_session
+from slipway.services.users import UserError, bootstrap, create_user, get_user_by_email
+from slipway.web import oauth
 from tests.conftest import PASSWORD, login, make_user
 
 PROFILE = {"id": 1001, "login": "octocat", "name": "Mona Octocat", "avatar_url": "https://avatars.githubusercontent.com/u/1001"}
@@ -295,12 +295,12 @@ async def test_create_admin_does_not_reactivate_an_account_with_no_way_in(admin_
     assert (await login(make_client(), "mona@example.com", "a-fresh-password"))["user"]["roles"] == ["admin", "developer"]
 
 
-# -------------------------------------------- 13: KILN_ADMIN_EMAIL reserves the first admin
+# -------------------------------------------- 13: SLIPWAY_ADMIN_EMAIL reserves the first admin
 
 
 @pytest.fixture
 def reserve(monkeypatch, caplog):
-    """Set KILN_ADMIN_EMAIL with a too-short password and run bootstrap, which creates no admin."""
+    """Set SLIPWAY_ADMIN_EMAIL with a too-short password and run bootstrap, which creates no admin."""
     caplog.set_level(logging.INFO)
 
     async def run() -> None:
@@ -324,17 +324,17 @@ async def test_reserved_admin_seat_is_not_claimable_with_github(client, gh, monk
     r = await _github_flow(client)
     assert r.headers["location"] == "/login?error=config"
     assert await _me(client) is None and await _user_count() == 0
-    assert "KILN_ADMIN_EMAIL reserves the first account" in caplog.text
+    assert "SLIPWAY_ADMIN_EMAIL reserves the first account" in caplog.text
 
 
-async def test_kiln_create_admin_fills_the_reserved_seat(make_client, gh, monkeypatch, reserve):
+async def test_slipway_create_admin_fills_the_reserved_seat(make_client, gh, monkeypatch, reserve):
     await reserve()
     assert (await _github_flow(make_client())).headers["location"] == "/login?error=config"
 
     assert await _create_admin("ops@corp.example", "--password", ADMIN_PASSWORD) == ["Created admin ops@corp.example."]
     data = await login(make_client(), "ops@corp.example", ADMIN_PASSWORD)
     assert data["user"]["roles"] == ["admin"]
-    r = await _github_flow(make_client())  # no allowlist, and Kiln has its admin now
+    r = await _github_flow(make_client())  # no allowlist, and Slipway has its admin now
     assert r.headers["location"] == "/login?error=not_allowed&login=octocat"
     monkeypatch.setattr(get_settings(), "github_allowed_users", ["octocat"])
     member = make_client()
@@ -348,7 +348,7 @@ async def test_reserved_admin_seat_is_not_claimable_by_registering(make_client, 
     body = {"email": "eve@evil.example", "password": "long-enough-pw"}
     r = await make_client().post("/api/v1/auth/register", json=body)
     assert r.status_code == 403
-    assert "server log" in r.json()["detail"] and "kiln create-admin" in r.json()["detail"]
+    assert "server log" in r.json()["detail"] and "slipway create-admin" in r.json()["detail"]
     assert await _user_count() == 0
 
     async with get_sessionmaker()() as db:
@@ -362,7 +362,7 @@ async def test_create_user_keeps_the_first_admin_seat(monkeypatch):
     monkeypatch.setattr(get_settings(), "admin_email", "ops@corp.example")
     async with get_sessionmaker()() as db:
         for allow in (None, False):
-            with pytest.raises(UserError, match="KILN_ADMIN_EMAIL"):
+            with pytest.raises(UserError, match="SLIPWAY_ADMIN_EMAIL"):
                 await create_user(db, email="eve@evil.example", password=PASSWORD, allow_first_admin=allow)
         user = await create_user(db, email="ops@corp.example", password=PASSWORD, allow_first_admin=True)
         assert user.role_names == ["admin"]
@@ -371,7 +371,7 @@ async def test_create_user_keeps_the_first_admin_seat(monkeypatch):
 
     monkeypatch.setattr(get_settings(), "admin_email", None)
     async with get_sessionmaker()() as db:  # nothing was committed: still empty
-        with pytest.raises(UserError, match="kiln create-admin"):
+        with pytest.raises(UserError, match="slipway create-admin"):
             await create_user(db, email="eve@evil.example", password=PASSWORD, allow_first_admin=False)
         assert (await create_user(db, email="first@example.com", password=PASSWORD)).role_names == ["admin"]
 
@@ -397,7 +397,7 @@ async def test_bootstrap_logs_admin_email_without_password(make_client, gh, monk
     with caplog.at_level(logging.ERROR, logger=users_service.log.name):
         async with get_sessionmaker()() as db:
             await bootstrap(db)
-    assert "KILN_ADMIN_PASSWORD is not set" in caplog.text and "cannot create the first account" in caplog.text
+    assert "SLIPWAY_ADMIN_PASSWORD is not set" in caplog.text and "cannot create the first account" in caplog.text
     r = await _github_flow(make_client())
     assert r.headers["location"] == "/login?error=config"
 
@@ -415,7 +415,7 @@ async def test_bootstrap_warns_when_admin_email_matches_no_account(monkeypatch, 
         return [r.getMessage() for r in caplog.records if r.name == users_service.log.name]
 
     found = await warnings()
-    assert len(found) == 1 and found[0].startswith("KILN_ADMIN_EMAIL=ops@corp.example is set, but Kiln already has users")
+    assert len(found) == 1 and found[0].startswith("SLIPWAY_ADMIN_EMAIL=ops@corp.example is set, but Slipway already has users")
     assert await _user_count() == 1
     monkeypatch.setattr(get_settings(), "admin_email", "someone@example.com")
     assert await warnings() == []

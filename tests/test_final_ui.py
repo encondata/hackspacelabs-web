@@ -11,11 +11,11 @@ from html.parser import HTMLParser
 import pytest
 from sqlalchemy import select, text, update
 
-from kiln.core.config import get_settings
-from kiln.core.crypto import reset_crypto_cache
-from kiln.db.session import get_sessionmaker
-from kiln.models import Deployment, Instance, InstanceStatus, OAuthAccount, User
-from kiln.services.users import create_user
+from slipway.core.config import get_settings
+from slipway.core.crypto import reset_crypto_cache
+from slipway.db.session import get_sessionmaker
+from slipway.models import Deployment, Instance, InstanceStatus, OAuthAccount, User
+from slipway.services.users import create_user
 from tests.conftest import login, make_user
 from tests.test_review_web import _add_repo, _client_with, _seed_world, run_js
 
@@ -93,14 +93,14 @@ async def test_unreadable_env_is_flagged_on_the_instance_pages(admin_client, cry
     assert "DATABASE_URL" in detail and "DATABASE_URL" in edit
     assert ENV_WARNING not in detail and ENV_WARNING not in edit and "clear_env" not in edit
 
-    # The stored value can't be decrypted with the configured key (as after a wrong KILN_ENCRYPTION_KEY).
+    # The stored value can't be decrypted with the configured key (as after a wrong SLIPWAY_ENCRYPTION_KEY).
     async with get_sessionmaker()() as db:
         await db.execute(text("UPDATE instances SET env = 'not-a-fernet-token'"))
         await db.commit()
 
     detail = (await admin_client.get(f"/instances/{inst_id}")).text
     env_row = re.search(r"Environment</dt><dd>(.*?)</dd>", detail, re.S).group(1)
-    assert ENV_WARNING in env_row and "KILN_ENCRYPTION_KEY" in env_row and "None" not in env_row
+    assert ENV_WARNING in env_row and "SLIPWAY_ENCRYPTION_KEY" in env_row and "None" not in env_row
     assert f'href="/instances/{inst_id}/edit"' in env_row
 
     edit = (await admin_client.get(f"/instances/{inst_id}/edit")).text
@@ -200,7 +200,7 @@ document.dispatchEvent(new Event("DOMContentLoaded"));
 await settle();
 var preview = {};
 document.querySelectorAll("[data-preview]").forEach(function (n) { preview[n.getAttribute("data-preview")] = n.textContent; });
-done({ preview: preview, body: window.kiln.serialize(form) });
+done({ preview: preview, body: window.slipway.serialize(form) });
 """
 
 
@@ -312,8 +312,8 @@ async def test_instance_pages_hide_host_details_without_hosts_read(admin_client,
     ids = await _seed_world(admin_client)
     reader = await _client_with(make_client, "ireader@example.com", ["instances:read"])
     page = (await reader.get(f"/instances/{ids['instance']}")).text
-    assert "/opt/kiln" not in page and "Path on host" not in page and f"/hosts/{ids['host']}" not in page
-    assert "/opt/kiln" in (await admin_client.get(f"/instances/{ids['instance']}")).text
+    assert "/opt/slipway" not in page and "Path on host" not in page and f"/hosts/{ids['host']}" not in page
+    assert "/opt/slipway" in (await admin_client.get(f"/instances/{ids['instance']}")).text
 
     writer = await _client_with(make_client, "iwriter@example.com", ["instances:write"])
     for path in (f"/instances/{ids['instance']}/edit", "/instances/new"):

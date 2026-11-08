@@ -2,10 +2,10 @@
 
 For UI work without GitHub or real Docker hosts. Refuses to run in production.
 
-    KILN_DATABASE_URL=sqlite+aiosqlite:///data/kiln-demo.db .venv/bin/python scripts/seed_demo.py
+    SLIPWAY_DATABASE_URL=sqlite+aiosqlite:///data/slipway-demo.db .venv/bin/python scripts/seed_demo.py
 
 Hosts get random (fake) pinned keys, so "Check" against them will fail; that's expected.
-Create your own admin first (KILN_ADMIN_EMAIL/KILN_ADMIN_PASSWORD or `kiln create-admin`): the demo
+Create your own admin first (SLIPWAY_ADMIN_EMAIL/SLIPWAY_ADMIN_PASSWORD or `slipway create-admin`): the demo
 team members have no password and cannot sign in.
 """
 
@@ -21,18 +21,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import func, select  # noqa: E402
 
-from kiln.cli import migrate  # noqa: E402
-from kiln.core.config import get_settings  # noqa: E402
-from kiln.db.base import utcnow  # noqa: E402
-from kiln.db.session import dispose_engine, get_sessionmaker  # noqa: E402
-from kiln.models import Deployment, Host, Instance, Repository  # noqa: E402
-from kiln.services import ssh  # noqa: E402
-from kiln.services.users import bootstrap, create_user, get_user_by_email, user_count  # noqa: E402
+from slipway.cli import migrate  # noqa: E402
+from slipway.core.config import get_settings  # noqa: E402
+from slipway.db.base import utcnow  # noqa: E402
+from slipway.db.session import dispose_engine, get_sessionmaker  # noqa: E402
+from slipway.models import Deployment, Host, Instance, Repository  # noqa: E402
+from slipway.services import ssh  # noqa: E402
+from slipway.services.users import bootstrap, create_user, get_user_by_email, user_count  # noqa: E402
 
 REPOS = [
-    ("kiln-web", "Kiln web app (dashboard, API, and console)", "TypeScript", "public", True, "docker-compose.yml"),
-    ("kiln-api", "Platform API and background workers", "Python", "private", True, None),
-    ("kiln-mobile", "iOS and Android mobile app", "Kotlin", "internal", False, None),
+    ("slipway-web", "Slipway web app (dashboard, API, and console)", "TypeScript", "public", True, "docker-compose.yml"),
+    ("slipway-api", "Platform API and background workers", "Python", "private", True, None),
+    ("slipway-mobile", "iOS and Android mobile app", "Kotlin", "internal", False, None),
     ("portal", "Customer portal and account settings", "TypeScript", "public", True, None),
     ("kiosk", "On-site kiosk app (Electron)", "JavaScript", "internal", True, None),
     ("wiki", "Team wiki and documentation", "Markdown", "public", False, None),
@@ -56,9 +56,9 @@ def build_log(name: str, sha: str, ok: bool) -> str:
         f"Commit {sha[:7]} — {random.choice(COMMITS)} (maria)",
         "Downloaded source archive (412 KiB)",
         "Connecting to deploy@10.0.1.12",
-        f"Unpacked release into /opt/kiln/{name}/releases/{sha[:12]}",
-        f"Wrote 3 environment variable(s) to /opt/kiln/{name}/shared/.env",
-        f"$ cd /opt/kiln/{name}/releases/{sha[:12]} && BUILDKIT_PROGRESS=plain docker build --pull -t kiln/{name}:{sha[:12]} .",
+        f"Unpacked release into /opt/slipway/{name}/releases/{sha[:12]}",
+        f"Wrote 3 environment variable(s) to /opt/slipway/{name}/shared/.env",
+        f"$ cd /opt/slipway/{name}/releases/{sha[:12]} && BUILDKIT_PROGRESS=plain docker build --pull -t slipway/{name}:{sha[:12]} .",
         "#1 [internal] load build definition from Dockerfile",
         "#2 [internal] load metadata for docker.io/library/node:22-alpine",
         "#5 [2/5] WORKDIR /app",
@@ -67,7 +67,7 @@ def build_log(name: str, sha: str, ok: bool) -> str:
         "#8 [5/5] COPY . .",
     ]
     if ok:
-        lines += ["#9 exporting to image", "#9 naming to docker.io/kiln/" + name, f"$ docker run -d --name kiln-{name} ...", "Deployment succeeded"]
+        lines += ["#9 exporting to image", "#9 naming to docker.io/slipway/" + name, f"$ docker run -d --name slipway-{name} ...", "Deployment succeeded"]
     else:
         lines += ["npm ERR! code ERESOLVE", "Deployment failed: Command exited with status 1"]
     return "".join(f"[{(utcnow()):%H:%M:%S}] {line}\n" for line in lines)
@@ -81,7 +81,7 @@ async def main() -> None:
             return
         if await user_count(db) == 0:
             # Otherwise the first demo user would silently become the only (password-less) admin.
-            sys.exit("Create an admin first (set KILN_ADMIN_EMAIL/KILN_ADMIN_PASSWORD or run `kiln create-admin`)")
+            sys.exit("Create an admin first (set SLIPWAY_ADMIN_EMAIL/SLIPWAY_ADMIN_PASSWORD or run `slipway create-admin`)")
         team = []
         for email, name, role in [("maria@example.com", "Maria Lopez", "developer"), ("james@example.com", "James Park", "maintainer"),
                                   ("sarah@example.com", "Sarah Chen", "viewer")]:
@@ -106,8 +106,8 @@ async def main() -> None:
         for name, ip, env, cpu, mem, status in HOSTS:
             key = ssh.generate_keypair()[1]
             hosts[name] = Host(
-                name=name, hostname=ip, username="deploy", environment=env, deploy_root="/opt/kiln",
-                auth_method="key", public_key=ssh.generate_keypair(f"kiln@{name}")[1], host_key=key,
+                name=name, hostname=ip, username="deploy", environment=env, deploy_root="/opt/slipway",
+                auth_method="key", public_key=ssh.generate_keypair(f"slipway@{name}")[1], host_key=key,
                 host_key_fingerprint=ssh.fingerprint(key), status=status, last_checked_at=now - timedelta(minutes=3),
                 docker_version="27.3.1", os_info="Ubuntu 24.04.1 LTS",
                 metrics={"cpus": 8, "cpu_percent": cpu, "mem_total_mb": 32768, "mem_percent": mem, "containers_running": random.randint(3, 14)},
@@ -116,8 +116,8 @@ async def main() -> None:
             db.add(hosts[name])
 
         specs = [
-            ("kiln-web-prod", "kiln-web", "prod-01", "compose", "running", [True, True, True]),
-            ("kiln-api-prod", "kiln-api", "prod-02", "dockerfile", "running", [True, False, True]),
+            ("slipway-web-prod", "slipway-web", "prod-01", "compose", "running", [True, True, True]),
+            ("slipway-api-prod", "slipway-api", "prod-02", "dockerfile", "running", [True, False, True]),
             ("portal-staging", "portal", "staging-01", "dockerfile", "running", [True]),
             ("kiosk-dev", "kiosk", "dev-01", "dockerfile", "failed", [True, False]),
             ("demo-app-dev", "demo-app", "dev-01", "dockerfile", "stopped", [True]),
@@ -127,7 +127,7 @@ async def main() -> None:
                 name=slug, slug=slug, repository=repos[repo], host=hosts[host], branch=repos[repo].default_branch,
                 build_source=src, compose_file="docker-compose.yml", env={"NODE_ENV": "production", "LOG_LEVEL": "info", "API_URL": "https://api.example.com"},
                 ports=[{"host": 8080 + len(slug), "container": 3000, "protocol": "tcp"}] if src == "dockerfile" else [],
-                volumes=[{"source": f"/var/lib/kiln/{slug}", "target": "/app/data"}] if src == "dockerfile" else [],
+                volumes=[{"source": f"/var/lib/slipway/{slug}", "target": "/app/data"}] if src == "dockerfile" else [],
                 status=status, created_by_id=team[1].id,
             )
             db.add(inst)

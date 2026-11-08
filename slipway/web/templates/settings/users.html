@@ -1,0 +1,95 @@
+{% extends "settings/_layout.html" %}
+{% from "_macros.html" import icon, avatar %}
+{% block title %}Users{% endblock %}
+
+{# A role you can't grant is offered disabled, but only while unchecked: serialize() leaves disabled boxes out,
+   so disabling a checked one would remove that role on save. #}
+{% macro role_boxes(selected) -%}
+<div class="choice-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr))">
+  {% for r in roles %}{% set locked = r.name not in grantable and r.name not in selected %}
+  <label class="choice"><input type="checkbox" name="roles" value="{{ r.name }}" data-array {{ 'checked' if r.name in selected }} {{ 'disabled' if locked }}>
+    <span><strong>{{ r.name|title }}</strong><small>{{ r.description }}</small>{% if locked %}<small>Needs permissions you don't have.</small>{% endif %}</span></label>
+  {% endfor %}
+</div>
+{%- endmacro %}
+
+{% block settings %}
+{% set can_write = auth.can(Perm.USERS_WRITE) %}
+<section class="card">
+  <div class="card-head"><span class="head-icon">{{ icon("users", "i-lg") }}</span>
+    <div><h2>Users</h2><p>People who can sign in to Slipway. Access comes from roles.</p></div>
+    <span class="spacer"></span>{% if can_write %}<button class="btn btn-primary" data-open="new-user">{{ icon("plus") }} Add user</button>{% endif %}</div>
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>User</th><th>Roles</th><th>Sign-in</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
+    <tbody>{% for u in users %}
+      <tr>
+        <td><span class="primary-cell">{{ avatar(u, "sm") }}<span><strong>{{ u.display_name }}{% if u.id == user.id %} <span class="subtle">(you)</span>{% endif %}</strong><small>{{ u.email }}</small></span></span></td>
+        <td>{% for r in u.role_names %}<span class="badge plain {{ 'primary' if r == 'admin' }}">{{ r }}</span> {% else %}<span class="subtle">none</span>{% endfor %}</td>
+        <td class="muted">{% if u.github %}{{ icon("github", "i-sm") }} @{{ u.github.login }}{% endif %}{% if u.github and u.password_hash %} · {% endif %}{% if u.password_hash %}Password{% endif %}{% if not u.github and not u.password_hash %}<span class="subtle">none</span>{% endif %}</td>
+        <td>{% if u.is_active %}<span class="badge success">Active</span>{% else %}<span class="badge">Deactivated</span>{% endif %}</td>
+        <td class="muted">{{ u.last_login_at|timeago }}</td>
+        <td class="actions-cell">{% if can_write and (u.id == user.id or u.id in manageable) %}<button class="btn btn-sm" data-open="edit-{{ u.id }}">Edit</button>{% endif %}</td>
+      </tr>
+    {% endfor %}</tbody>
+  </table></div>
+</section>
+
+{% if can_write %}
+<dialog class="modal" id="new-user" style="width: min(680px, calc(100vw - 32px))">
+  <form method="post" action="/js-required" data-form="POST /api/v1/users" data-then="reload" data-success="User created">
+    <div class="modal-head"><h2>Add user</h2><button class="icon-btn" type="button" data-close aria-label="Close">{{ icon("x") }}</button></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field"><label for="nu-email">Email</label><input class="input" id="nu-email" name="email" type="email" required></div>
+        <div class="field"><label for="nu-name">Name</label><input class="input" id="nu-name" name="full_name"></div>
+        <div class="field"><label for="nu-gh">GitHub username</label>
+          <input class="input mono" id="nu-gh" name="github_login" placeholder="octocat">
+          <span class="help">Lets them sign in with GitHub.</span></div>
+        <div class="field"><label for="nu-pw">Initial password</label>
+          <input class="input" id="nu-pw" name="password" type="password" autocomplete="new-password" minlength="10">
+          <span class="help">Optional if a GitHub username is set.</span></div>
+      </div>
+      <span class="label-text">Roles</span>
+      {{ role_boxes(new_user_roles) }}
+    </div>
+    <div class="modal-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Create user</button></div>
+  </form>
+</dialog>
+
+{% for u in users %}
+<dialog class="modal" id="edit-{{ u.id }}" style="width: min(680px, calc(100vw - 32px))">
+  <form method="post" action="/js-required" data-form="PATCH /api/v1/users/{{ u.id }}" data-then="reload" data-success="User updated">
+    <div class="modal-head"><h2>Edit {{ u.display_name }}</h2><button class="icon-btn" type="button" data-close aria-label="Close">{{ icon("x") }}</button></div>
+    <div class="modal-body">
+      <div class="field"><label>Name</label><input class="input" name="full_name" value="{{ u.full_name }}" data-keep-empty></div>
+      <span class="label-text">Roles</span>
+      {{ role_boxes(u.role_names) }}
+      {% if u.id != user.id %}
+      <label class="check"><input type="checkbox" name="is_active" {{ 'checked' if u.is_active }}><span><strong>Active</strong><br><span class="subtle">Deactivated users are signed out, lose their API tokens and GitHub link, and cannot sign in.
+        {%- if not u.password_hash and u.github %} They have no password, so reactivating them later needs one: type it under Reset password in the same save.
+        {%- elif not u.password_hash %} They have no password or GitHub link, so they cannot sign in until you set one with Reset password.{% endif %}</span></span></label>
+      {% endif %}
+      {% if u.id != user.id %}
+      <div class="field"><label>Reset password <span class="subtle">(optional; also signs them out, deletes their API tokens and unlinks GitHub)</span></label><input class="input" name="password" type="password" autocomplete="new-password" minlength="10"></div>
+      {% if u.github %}
+      <div class="row wrap"><span class="muted">{{ icon("github", "i-sm") }} Signs in with GitHub as <strong>@{{ u.github.login }}</strong></span>
+        {# Unlinking would lock out a user with no password, so the API refuses it; a reset sets one and unlinks too. #}
+        {% if u.password_hash %}
+        <button class="btn btn-sm btn-danger" type="button" data-api="DELETE /api/v1/users/{{ u.id }}/github"
+          data-confirm="Unlink @{{ u.github.login }} from {{ u.email }}? They can no longer sign in with that GitHub account."
+          data-success="GitHub unlinked" data-then="reload">Unlink GitHub</button>
+        {% else %}<span class="help">Has no password: Reset password sets one and also unlinks GitHub.</span>{% endif %}</div>
+      {% endif %}
+      {% else %}
+      <p class="help">Change your own password under <a href="/settings">Profile</a>.</p>
+      {% endif %}
+    </div>
+    <div class="modal-foot">
+      {% if u.id != user.id %}<button class="btn btn-danger" type="button" style="margin-right:auto" data-api="DELETE /api/v1/users/{{ u.id }}" data-confirm="Delete {{ u.email }} permanently?" data-then="reload">{{ icon("trash") }} Delete</button>{% endif %}
+      <button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+{% endfor %}
+{% endif %}
+{% endblock %}

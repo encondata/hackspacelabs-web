@@ -7,20 +7,20 @@ import shlex
 import asyncssh
 import pytest
 
-from kiln.services import ssh
+from slipway.services import ssh
 
 PROBE_OUTPUT = """Ubuntu 24.04 LTS
-::kiln::
+::slipway::
 4
-::kiln::
+::slipway::
 1.00 0.50 0.25 1/200 1234
-::kiln::
+::slipway::
 MemTotal:        8000000 kB
 MemAvailable:    6000000 kB
-::kiln::
+::slipway::
 27.3.1
 rc=0
-::kiln::
+::slipway::
 3
 """
 
@@ -45,7 +45,7 @@ class _Server(asyncssh.SSHServer):
 
 
 def sent_command(process: asyncssh.SSHServerProcess) -> str:
-    """The command as Kiln built it: run() sends ``exec /bin/sh -c <quoted command>``."""
+    """The command as Slipway built it: run() sends ``exec /bin/sh -c <quoted command>``."""
     words = shlex.split(process.command or "")
     assert words[:3] == ["exec", "/bin/sh", "-c"] and len(words) == 4, process.command
     return words[3]
@@ -146,8 +146,8 @@ async def test_unreachable_host():
 
 
 def test_key_helpers():
-    priv, pub = ssh.generate_keypair("kiln@test")
-    assert pub.startswith("ssh-ed25519 ") and pub.endswith("kiln@test")
+    priv, pub = ssh.generate_keypair("slipway@test")
+    assert pub.startswith("ssh-ed25519 ") and pub.endswith("slipway@test")
     assert ssh.public_key_from_private(priv) == pub
     with pytest.raises(ssh.SSHError):
         ssh.public_key_from_private("not a key")

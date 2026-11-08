@@ -1,4 +1,4 @@
-from kiln.core.permissions import has_permission, validate_permissions
+from slipway.core.permissions import has_permission, validate_permissions
 from tests.conftest import PASSWORD, login, make_user
 
 
@@ -50,7 +50,9 @@ async def test_cookie_writes_require_csrf(admin_client):
 
 async def test_api_token_auth_and_revocation(admin_client, make_client):
     created = (await admin_client.post("/api/v1/tokens", json={"name": "ci", "expires_in_days": 30})).json()
-    assert created["token"].startswith("kiln_pat_")
+    assert created["token"].startswith("slipway_pat_")
+    # The listed prefix keeps 7 random characters after "slipway_pat_" and fits the 20-character column.
+    assert created["prefix"] == created["token"][:19]
 
     bot = make_client()
     bot.headers["Authorization"] = f"Bearer {created['token']}"

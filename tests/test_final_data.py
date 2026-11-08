@@ -20,18 +20,18 @@ from sqlalchemy.dialects.postgresql.asyncpg import AsyncAdapt_asyncpg_connection
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from kiln.api.deps import DB
-from kiln.api.v1 import repositories as repositories_api
-from kiln.core.config import get_settings
-from kiln.core.crypto import reset_crypto_cache
-from kiln.db.session import get_engine, get_sessionmaker
-from kiln.main import create_app
-from kiln.models import AuditEvent, Deployment, Host, Instance, OAuthAccount, Repository, User
-from kiln.models.repository import DEFAULT_BRANCH_TOO_LONG
-from kiln.services import deployer, hosts, ssh
-from kiln.services.github import GitHubClient
-from kiln.services.repos import sync_repositories
-from kiln.services.users import create_user
+from slipway.api.deps import DB
+from slipway.api.v1 import repositories as repositories_api
+from slipway.core.config import get_settings
+from slipway.core.crypto import reset_crypto_cache
+from slipway.db.session import get_engine, get_sessionmaker
+from slipway.main import create_app
+from slipway.models import AuditEvent, Deployment, Host, Instance, OAuthAccount, Repository, User
+from slipway.models.repository import DEFAULT_BRANCH_TOO_LONG
+from slipway.services import deployer, hosts, ssh
+from slipway.services.github import GitHubClient
+from slipway.services.repos import sync_repositories
+from slipway.services.users import create_user
 from tests.test_deployer import SHA, FakeGitHub, FakeRemote, _connect
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -44,25 +44,25 @@ SECRET_ENV = {"DATABASE_URL": "postgres://app:secret@db/app"}
 
 @pytest.fixture
 def use_key():
-    """Switch KILN_ENCRYPTION_KEY for one test, rebuilding the cached settings and keys."""
-    saved = os.environ.get("KILN_ENCRYPTION_KEY")
+    """Switch SLIPWAY_ENCRYPTION_KEY for one test, rebuilding the cached settings and keys."""
+    saved = os.environ.get("SLIPWAY_ENCRYPTION_KEY")
 
     def apply(value: str) -> None:
-        os.environ["KILN_ENCRYPTION_KEY"] = value
+        os.environ["SLIPWAY_ENCRYPTION_KEY"] = value
         get_settings.cache_clear()
         reset_crypto_cache()
 
     yield apply
     if saved is None:
-        os.environ.pop("KILN_ENCRYPTION_KEY", None)
+        os.environ.pop("SLIPWAY_ENCRYPTION_KEY", None)
     else:
-        os.environ["KILN_ENCRYPTION_KEY"] = saved
+        os.environ["SLIPWAY_ENCRYPTION_KEY"] = saved
     get_settings.cache_clear()
     reset_crypto_cache()
 
 
 async def _unreadable_instance(use_key) -> str:
-    """A deployed instance whose env was encrypted with K1, while Kiln now only has K2."""
+    """A deployed instance whose env was encrypted with K1, while Slipway now only has K2."""
     use_key(K1)
     async with get_sessionmaker()() as db:
         host = Host(name="prod-01", hostname="10.0.0.1", username="deploy", host_key="ssh-ed25519 AAAA", metrics={})
@@ -105,7 +105,7 @@ async def test_saving_the_edit_form_keeps_env_that_cannot_be_decrypted(admin_cli
     assert (await admin_client.get(f"/api/v1/instances/{instance_id}")).json()["env_unreadable"] is True
     assert (await admin_client.get("/api/v1/instances")).json()[0]["env_unreadable"] is True
     env = await admin_client.get(f"/api/v1/instances/{instance_id}/env")
-    assert env.status_code == 409 and "KILN_ENCRYPTION_KEY" in env.json()["detail"]
+    assert env.status_code == 409 and "SLIPWAY_ENCRYPTION_KEY" in env.json()["detail"]
 
     use_key(f"{K2},{K1}")  # the documented recovery still brings the values back
     assert await _env(instance_id) == SECRET_ENV
@@ -390,7 +390,7 @@ async def test_branch_list_only_promotes_a_usable_default_branch(admin_client, m
 
 
 def test_migrations_widen_the_branch_columns(tmp_path):
-    env = {**os.environ, "KILN_DATABASE_URL": f"sqlite+aiosqlite:///{tmp_path}/m.db", "KILN_ENV_FILE": "", "PYTHONPATH": str(ROOT)}
+    env = {**os.environ, "SLIPWAY_DATABASE_URL": f"sqlite+aiosqlite:///{tmp_path}/m.db", "SLIPWAY_ENV_FILE": "", "PYTHONPATH": str(ROOT)}
     for args in (["upgrade", "head"], ["downgrade", "-1"], ["upgrade", "head"], ["check"]):
         done = subprocess.run([sys.executable, "-m", "alembic", *args], cwd=ROOT, env=env, capture_output=True, text=True)
         assert done.returncode == 0, (args, done.stderr)

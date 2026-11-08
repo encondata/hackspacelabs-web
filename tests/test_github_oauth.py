@@ -8,8 +8,8 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from kiln.core.config import get_settings
-from kiln.web import oauth
+from slipway.core.config import get_settings
+from slipway.web import oauth
 from tests.conftest import login, make_user
 
 PROFILE = {"id": 1001, "login": "octocat", "name": "Mona Octocat", "avatar_url": "https://avatars.githubusercontent.com/u/1001"}
@@ -73,7 +73,7 @@ async def test_state_mismatch_rejected(client):
     assert (await client.get("/api/v1/auth/me")).status_code == 401
 
 
-async def test_unknown_user_blocked_once_kiln_has_users(client):
+async def test_unknown_user_blocked_once_slipway_has_users(client):
     await make_user("admin@example.com")
     state = await _start(client)
     r = await client.get(f"/auth/github/callback?code=good-code&state={state}")

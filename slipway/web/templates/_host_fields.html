@@ -1,0 +1,61 @@
+{# Shared add/edit host fields. `h` is the host being edited, or None. #}
+{% from "_macros.html" import icon %}
+<div class="form-grid">
+  <div class="field">
+    <label for="hf-name">Name</label>
+    <input class="input" id="hf-name" name="name" value="{{ h.name if h else '' }}" placeholder="prod-01" required pattern="[A-Za-z0-9][A-Za-z0-9 ._\-]{0,63}">
+  </div>
+  <div class="field">
+    <label for="hf-env">Environment</label>
+    <input class="input" id="hf-env" name="environment" value="{{ h.environment if h else '' }}" placeholder="prod, staging, dev…" list="env-options" data-keep-empty>
+    <datalist id="env-options"><option>prod</option><option>staging</option><option>dev</option></datalist>
+  </div>
+  <div class="field">
+    <label for="hf-hostname">Hostname or IP</label>
+    <input class="input mono" id="hf-hostname" name="hostname" value="{{ h.hostname if h else '' }}" placeholder="10.0.1.12" required>
+  </div>
+  <div class="form-grid" style="grid-template-columns: 96px 1fr; gap: 12px">
+    <div class="field">
+      <label for="hf-port">Port</label>
+      <input class="input" id="hf-port" name="port" type="number" min="1" max="65535" value="{{ h.port if h else 22 }}">
+    </div>
+    <div class="field">
+      <label for="hf-user">SSH user</label>
+      <input class="input mono" id="hf-user" name="username" value="{{ h.username if h else 'deploy' }}" required>
+    </div>
+  </div>
+  <div class="field span-2">
+    <label for="hf-root">Deploy root</label>
+    <input class="input mono" id="hf-root" name="deploy_root" value="{{ h.deploy_root if h else '/opt/slipway' }}">
+    <span class="help">Where Slipway keeps releases on the host. The SSH user must own it and be in the <code>docker</code> group.</span>
+  </div>
+  <div class="field span-2">
+    <span class="label-text">Authentication</span>
+    <div class="choice-grid">
+      {% set method = "keep" if h else "generate" %}
+      {% if h %}
+      <label class="choice"><input type="radio" name="auth_method" value="" checked><span><strong>Keep current</strong><small>{{ "SSH key" if h.auth_method == "key" else "Password" }}</small></span></label>
+      {% endif %}
+      <label class="choice"><input type="radio" name="auth_method" value="generate" {{ 'checked' if not h }}><span><strong>Generate key</strong><small>Slipway creates an ed25519 key; add its public key to the host.</small></span></label>
+      <label class="choice"><input type="radio" name="auth_method" value="key"><span><strong>Paste private key</strong><small>Use an existing deploy key.</small></span></label>
+      <label class="choice"><input type="radio" name="auth_method" value="password"><span><strong>Password</strong><small>Not recommended.</small></span></label>
+    </div>
+  </div>
+  <div class="field span-2" data-show-when="auth_method=key">
+    <label for="hf-key">Private key</label>
+    <textarea class="input" id="hf-key" name="private_key" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea>
+  </div>
+  <div class="field span-2" data-show-when="auth_method=key">
+    <label for="hf-pass">Key passphrase <span class="subtle">(optional)</span></label>
+    <input class="input" id="hf-pass" name="key_passphrase" type="password" autocomplete="off">
+  </div>
+  <div class="field span-2" data-show-when="auth_method=password">
+    <label for="hf-pw">SSH password</label>
+    <input class="input" id="hf-pw" name="password" type="password" autocomplete="off">
+  </div>
+  <div class="field span-2">
+    <label for="hf-desc">Description <span class="subtle">(optional)</span></label>
+    <input class="input" id="hf-desc" name="description" value="{{ h.description if h else '' }}" data-keep-empty>
+  </div>
+</div>
+<p class="subtle">Secrets are encrypted at rest with <code>SLIPWAY_ENCRYPTION_KEY</code> and never shown again.</p>

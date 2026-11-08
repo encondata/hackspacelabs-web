@@ -1,7 +1,7 @@
 [project]
-name = "kiln"
+name = "slipway"
 version = "0.1.0"
-description = "Kiln: deploy GitHub repositories to your own Docker hosts over SSH. Deploy. Run. Observe."
+description = "Slipway: deploy GitHub repositories to your own Docker hosts over SSH. Deploy. Run. Observe."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -29,17 +29,17 @@ dev = [
 ]
 
 [project.scripts]
-kiln = "kiln.cli:main"
+slipway = "slipway.cli:main"
 
 [build-system]
 requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["kiln*"]
+include = ["slipway*"]
 
 [tool.setuptools.package-data]
-kiln = ["web/templates/**/*", "web/static/**/*"]
+slipway = ["web/templates/**/*", "web/static/**/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

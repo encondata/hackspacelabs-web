@@ -24,10 +24,10 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import text
 
-from kiln.db.session import get_sessionmaker
-from kiln.models import Deployment, Host, Instance, Repository
-from kiln.schemas import InstanceCreate, InstanceUpdate
-from kiln.services import deployer, ssh
+from slipway.db.session import get_sessionmaker
+from slipway.models import Deployment, Host, Instance, Repository
+from slipway.schemas import InstanceCreate, InstanceUpdate
+from slipway.services import deployer, ssh
 from tests.conftest import make_user
 from tests.test_deployer import (
     ARCHIVE_TOP,
@@ -42,7 +42,7 @@ from tests.test_deployer import (
 
 # The shells a deploy user may log in with. zsh (the macOS default) used to break deploys.
 SHELLS = [s for s in ("sh", "dash", "bash", "zsh") if shutil.which(s)]
-LABEL = "label=kiln.instance=00000000-0000-0000-0000-000000000001"
+LABEL = "label=slipway.instance=00000000-0000-0000-0000-000000000001"
 
 DOCKER_SHIM = """#!/bin/sh
 echo "$*" >> "$DOCKER_LOG"
@@ -186,14 +186,14 @@ def _releases(root: Path) -> Path:
     return releases
 
 
-IMAGES = "kiln/web-prod:t5 kiln/web-prod:t4 kiln/web-prod:t3 kiln/web-prod:t2 kiln/web-prod:t1"
+IMAGES = "slipway/web-prod:t5 slipway/web-prod:t4 slipway/web-prod:t3 slipway/web-prod:t2 slipway/web-prod:t1"
 def _image_calls(label: str = LABEL) -> list[str]:
     """The docker calls with which prune removes superseded images and dangling layers."""
     return [
-        "image ls --format {{.Repository}}:{{.Tag}} kiln/web-prod",
-        "image rm kiln/web-prod:t2 kiln/web-prod:t1",
+        "image ls --format {{.Repository}}:{{.Tag}} slipway/web-prod",
+        "image rm slipway/web-prod:t2 slipway/web-prod:t1",
         f"image prune -f --filter {label}",
-        "image prune -f --filter label=com.docker.compose.project=kiln-web-prod",
+        "image prune -f --filter label=com.docker.compose.project=slipway-web-prod",
     ]
 
 
@@ -263,7 +263,7 @@ async def test_deploys_succeed_whatever_the_login_shell(tmp_path, docker_shim):
         calls = log.read_text().splitlines()
         assert any(c.startswith("run -d ") for c in calls), (shell, calls)
         pruned = [c for c in calls if c.startswith("image ") and "inspect" not in c]
-        assert pruned == _image_calls(f"label=kiln.instance={inst_id}"), (shell, calls)
+        assert pruned == _image_calls(f"label=slipway.instance={inst_id}"), (shell, calls)
 
 
 class _OpenServer(asyncssh.SSHServer):
@@ -319,7 +319,7 @@ async def test_run_hands_the_command_to_sh_whatever_the_login_shell(ssh_server, 
         with pytest.raises(ssh.CommandFailed) as exc:
             await remote.run(failing, timeout=30)
     assert received == [f"exec /bin/sh -c {shlex.quote(c)}" for c in (status_var, exit_in_pipe, failing)]
-    # Errors name the command as Kiln built it, not the wrapper.
+    # Errors name the command as Slipway built it, not the wrapper.
     assert exc.value.command == failing and exc.value.exit_status == 4 and "it's 42" in str(exc.value)
 
 
@@ -327,10 +327,10 @@ async def test_run_hands_the_command_to_sh_whatever_the_login_shell(ssh_server, 
 
 
 def test_dockerfile_mode_never_pulls_its_image():
-    build, _, run = deployer.build_commands(_instance(), "/opt/kiln/web-prod/releases/r", SHA)
+    build, _, run = deployer.build_commands(_instance(), "/opt/slipway/web-prod/releases/r", SHA)
     assert build.startswith("docker run --pull=never --help >/dev/null 2>&1 || ")
-    assert build.endswith(" . && docker image inspect --format . kiln/web-prod:a1b2c3d4e5f6 >/dev/null")
-    assert run.startswith("docker run -d --pull=never ") and run.endswith(" kiln/web-prod:a1b2c3d4e5f6")
+    assert build.endswith(" . && docker image inspect --format . slipway/web-prod:a1b2c3d4e5f6 >/dev/null")
+    assert run.startswith("docker run -d --pull=never ") and run.endswith(" slipway/web-prod:a1b2c3d4e5f6")
 
 
 async def test_docker_without_pull_never_fails_before_the_container_is_removed(tmp_path, docker_shim):
@@ -351,7 +351,7 @@ async def test_docker_without_pull_never_fails_before_the_container_is_removed(t
         else:
             assert dep.status == "failed" and dep.error.endswith(deployer.PULL_NEVER_UNSUPPORTED), dep.error
             # Nothing built, removed or started; the failed release's clean-up only lists containers.
-            assert calls == ["run --pull=never --help", "ps -aq --filter label=com.docker.compose.project=kiln-web-prod"]
+            assert calls == ["run --pull=never --help", "ps -aq --filter label=com.docker.compose.project=slipway-web-prod"]
             assert "unknown flag" not in dep.log  # the check's own message stands alone
 
 
@@ -364,10 +364,10 @@ async def test_build_without_a_local_image_fails_before_the_container_is_removed
     remote = ShellRemote("/bin/sh", {**env, "FAKE_NO_IMAGE": "1"})
     await deployer.run_deployment(dep_id, connect=_local(remote), github=FakeGitHub)
     dep = await _deployment(dep_id)
-    assert dep.status == "failed" and "No such image: kiln/web-prod:a1b2c3d4e5f6" in dep.error
+    assert dep.status == "failed" and "No such image: slipway/web-prod:a1b2c3d4e5f6" in dep.error
     calls = log.read_text().splitlines()
     assert any(c.startswith("build ") for c in calls)
-    removal = f"ps -aq --filter label=kiln.instance={inst_id}"
+    removal = f"ps -aq --filter label=slipway.instance={inst_id}"
     assert not any(c.startswith(removal) or c.startswith("run -d ") for c in calls), calls
 
 
@@ -461,7 +461,7 @@ async def test_kept_lines_are_clipped(ssh_server):
 async def test_containers_with_many_labels_are_still_listed(admin_client, ssh_server, monkeypatch):
     # Labels (an image's included) can make `docker ps --format '{{json .}}'` rows longer than the cap.
     container = {
-        "ID": "0123456789ab", "Names": "kiln-web-prod", "Image": "kiln/web-prod:a1b2c3d4e5f6",
+        "ID": "0123456789ab", "Names": "slipway-web-prod", "Image": "slipway/web-prod:a1b2c3d4e5f6",
         "Command": '"node server.js"', "State": "running", "Status": "Up 2 hours",
         "Ports": "0.0.0.0:8080->3000/tcp", "RunningFor": "2 hours ago",
         "Labels": ",".join(f"org.example.label{n}={'v' * 200}" for n in range(100)),

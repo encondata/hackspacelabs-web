@@ -1,4 +1,4 @@
-"""Regression tests for the web-UI review findings (permissions on pages, OAuth errors, forms, kiln.js)."""
+"""Regression tests for the web-UI review findings (permissions on pages, OAuth errors, forms, slipway.js)."""
 
 from __future__ import annotations
 
@@ -15,13 +15,13 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
-from kiln.core.config import get_settings
-from kiln.db.session import get_sessionmaker
-from kiln.models import Deployment, Repository, Role
-from kiln.services import ssh
+from slipway.core.config import get_settings
+from slipway.db.session import get_sessionmaker
+from slipway.models import Deployment, Repository, Role
+from slipway.services import ssh
 from tests.conftest import login, make_user
 
-KILN_JS = Path(__file__).parent.parent / "kiln" / "web" / "static" / "js" / "kiln.js"
+SLIPWAY_JS = Path(__file__).parent.parent / "slipway" / "web" / "static" / "js" / "slipway.js"
 JSC = Path("/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc")
 
 
@@ -100,7 +100,7 @@ def _parse(page: str, dialog_id: str = "") -> _Forms:
 
 
 def _serialize(inputs: list[dict]) -> dict:
-    """What kiln.js serialize() sends for these inputs (checkbox arrays and plain text fields)."""
+    """What slipway.js serialize() sends for these inputs (checkbox arrays and plain text fields)."""
     out: dict = {}
     for a in inputs:
         if "data-array" in a:
@@ -202,14 +202,14 @@ async def test_role_editor_keeps_wildcards_and_unknown_permissions(admin_client)
 # ------------------------------------------------------------ OAuth errors
 
 
-PHISH = "Kiln moved. Sign in at https://kiln-corp.example.net"
+PHISH = "Slipway moved. Sign in at https://slipway-corp.example.net"
 
 
 async def test_login_error_only_shows_fixed_messages(client):
     page = (await client.get("/login", params={"error": PHISH})).text
-    assert "kiln-corp.example.net" not in page and "Sign-in failed. Please try again." in page
+    assert "slipway-corp.example.net" not in page and "Sign-in failed. Please try again." in page
     page = (await client.get("/login", params={"error": "not_allowed", "login": "octo-cat"})).text
-    assert "@octo-cat is not allowed to sign in to Kiln" in page
+    assert "@octo-cat is not allowed to sign in to Slipway" in page
     for bad in ("evil.example/phish", "octocat\n", "x" * 40, "<b>x</b>"):
         page = (await client.get("/login", params={"error": "not_allowed", "login": bad})).text
         assert "This GitHub account is not allowed to sign in" in page and "evil.example" not in page and "<b>x" not in page
@@ -219,9 +219,9 @@ async def test_login_error_only_shows_fixed_messages(client):
 
 async def test_settings_error_only_shows_fixed_messages(admin_client):
     page = (await admin_client.get("/settings", params={"error": PHISH})).text
-    assert "kiln-corp.example.net" not in page and "Sign-in failed. Please try again." in page
+    assert "slipway-corp.example.net" not in page and "Sign-in failed. Please try again." in page
     page = (await admin_client.get("/settings", params={"error": "already_linked", "login": "mona"})).text
-    assert "@mona is already linked to another Kiln account" in page
+    assert "@mona is already linked to another Slipway account" in page
 
 
 async def test_first_admin_callout_respects_github_allowlist(client, monkeypatch):
@@ -316,8 +316,8 @@ async def test_host_setup_snippet_shell_quotes_the_public_key(admin_client, tmp_
     assert (tmp_path / ".ssh" / "authorized_keys").read_text() == host["public_key"] + "\n"
 
 
-# ----------------------------------------------------------------- kiln.js
-# The real kiln.js runs against a small fake DOM under node or macOS JavaScriptCore.
+# ----------------------------------------------------------------- slipway.js
+# The real slipway.js runs against a small fake DOM under node or macOS JavaScriptCore.
 
 HARNESS = r"""
 var out = typeof print === "function" ? print : console.log;
@@ -329,7 +329,7 @@ var navigator = {};
 var hrefs = [], execCommands = [], fetchCalls = [], fetchBodies = [], routes = {};
 var execResult = true;
 var location = {
-  origin: "http://kiln.test", protocol: "http:", host: "kiln.test", pathname: "/", search: "",
+  origin: "http://slipway.test", protocol: "http:", host: "slipway.test", pathname: "/", search: "",
   get href() { return this.origin + this.pathname + this.search; },
   set href(v) { hrefs.push(String(v)); },
   reload: function () { hrefs.push("RELOAD"); },
@@ -535,7 +535,7 @@ def run_js(tmp_path: Path, scenario: str) -> dict:
         pytest.skip("no JavaScript runtime (node or JavaScriptCore) available")
     script = tmp_path / "scenario.js"
     wrapped = f"(async function () {{\n{scenario}\n}})().catch(function (e) {{ out('ERROR ' + e + '\\n' + e.stack); }});"
-    script.write_text(HARNESS + "\n" + KILN_JS.read_text() + "\n" + wrapped)
+    script.write_text(HARNESS + "\n" + SLIPWAY_JS.read_text() + "\n" + wrapped)
     proc = subprocess.run([*runtime, str(script)], capture_output=True, text=True, timeout=60)
     results = [line for line in proc.stdout.splitlines() if line.startswith("RESULT ")]
     assert results, proc.stdout + proc.stderr
@@ -594,13 +594,13 @@ for (var i = 0; i < specs.length; i++) {
 }
 done({ hrefs: hrefs });
 """)
-    assert result["hrefs"] == ["/", "/", "/", "/", "/", "http://kiln.test/instances/abc"]
+    assert result["hrefs"] == ["/", "/", "/", "/", "/", "http://slipway.test/instances/abc"]
 
 
 def test_js_copy_falls_back_without_the_clipboard_api(tmp_path):
     result = run_js(tmp_path, """
-var plain = h("button", { "data-copy": "ssh-ed25519 AAAA kiln@prod" });
-var dlg = h("dialog", { open: "" }, [h("pre", { id: "token-value" }, ["kiln_secret_token\\n"]), h("button", { "data-copy-target": "#token-value" })]);
+var plain = h("button", { "data-copy": "ssh-ed25519 AAAA slipway@prod" });
+var dlg = h("dialog", { open: "" }, [h("pre", { id: "token-value" }, ["slipway_secret_token\\n"]), h("button", { "data-copy-target": "#token-value" })]);
 document.body.appendChild(plain); document.body.appendChild(dlg);
 user("click", plain);
 await settle();
@@ -619,12 +619,12 @@ await settle();
 done({ ok: ok, failed: failed, clip: clip, legacyCalls: execCommands.length });
 """)
     assert result["ok"]["copies"] == [
-        ["copy", {"text": "ssh-ed25519 AAAA kiln@prod", "parent": "BODY"}],
-        ["copy", {"text": "kiln_secret_token", "parent": "DIALOG"}],
+        ["copy", {"text": "ssh-ed25519 AAAA slipway@prod", "parent": "BODY"}],
+        ["copy", {"text": "slipway_secret_token", "parent": "DIALOG"}],
     ]
     assert result["ok"]["toasts"] == ["toast success|Copied to clipboard"] * 2
     assert len(result["failed"]) == 1 and result["failed"][0].startswith("toast error|Couldn't copy")
-    assert result["clip"] == ["ssh-ed25519 AAAA kiln@prod"] and result["legacyCalls"] == 3
+    assert result["clip"] == ["ssh-ed25519 AAAA slipway@prod"] and result["legacyCalls"] == 3
 
 
 def test_js_switching_repository_resets_untouched_defaults(tmp_path):
@@ -649,12 +649,12 @@ await settle();
 var repo = document.querySelector("#repo-select");
 repo.value = "r2"; user("input", repo); user("change", repo);
 await settle();
-var switched = window.kiln.serialize(form);
+var switched = window.slipway.serialize(form);
 var name = document.querySelector("#inst-name");
 name.value = "my-web"; user("input", name);
 repo.value = "r1"; user("input", repo); user("change", repo);
 await settle();
-done({ switched: switched, back: window.kiln.serialize(form) });
+done({ switched: switched, back: window.slipway.serialize(form) });
 """)
     switched, back = result["switched"], result["back"]
     assert switched["repository_id"] == "r2" and switched["branch"] == "trunk"

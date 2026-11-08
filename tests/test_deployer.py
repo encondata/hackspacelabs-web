@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from kiln.db.session import get_sessionmaker
-from kiln.models import Deployment, Host, Instance, Repository
-from kiln.services import deployer, ssh
-from kiln.services.github import CommitInfo
+from slipway.db.session import get_sessionmaker
+from slipway.models import Deployment, Host, Instance, Repository
+from slipway.services import deployer, ssh
+from slipway.services.github import CommitInfo
 from tests.conftest import make_user
 
 SHA = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0"
@@ -47,7 +47,7 @@ def _member(name: str, kind: bytes, linkname: str = "") -> tarfile.TarInfo:
 
 
 def test_validation_helpers():
-    assert deployer.slugify("Kiln Web (prod)") == "kiln-web-prod"
+    assert deployer.slugify("Slipway Web (prod)") == "slipway-web-prod"
     with pytest.raises(ValueError):
         deployer.slugify("!!!")
     assert deployer.clean_relative_path("./docker/Dockerfile") == "docker/Dockerfile"
@@ -55,7 +55,7 @@ def test_validation_helpers():
     for bad in ("../etc/passwd", "/etc/passwd", "a/../../b", "x; rm -rf /", "$(id)"):
         with pytest.raises(ValueError):
             deployer.clean_relative_path(bad)
-    assert deployer.clean_deploy_root("/opt/kiln/") == "/opt/kiln"
+    assert deployer.clean_deploy_root("/opt/slipway/") == "/opt/slipway"
     for bad in ("/", "relative", "/opt/../etc"):
         with pytest.raises(ValueError):
             deployer.clean_deploy_root(bad)
@@ -67,7 +67,7 @@ def test_validation_helpers():
 
 
 def _instance(**kw) -> Instance:
-    host = Host(name="prod-01", hostname="10.0.0.1", port=22, username="deploy", deploy_root="/opt/kiln")
+    host = Host(name="prod-01", hostname="10.0.0.1", port=22, username="deploy", deploy_root="/opt/slipway")
     repo = Repository(github_id=1, full_name="acme/web", owner="acme", name="web", html_url="https://github.com/acme/web")
     defaults = dict(
         id=uuid.UUID("00000000-0000-0000-0000-000000000001"), name="web", slug="web-prod", branch="main",
@@ -81,25 +81,25 @@ def _instance(**kw) -> Instance:
 
 def test_dockerfile_commands_are_quoted():
     inst = _instance(dockerfile_path="docker/Dockerfile prod", build_context="src")
-    build, rm, run = deployer.build_commands(inst, "/opt/kiln/web-prod/releases/a1b2c3d4e5f6", SHA)
+    build, rm, run = deployer.build_commands(inst, "/opt/slipway/web-prod/releases/a1b2c3d4e5f6", SHA)
     assert "-f 'docker/Dockerfile prod'" in build
-    assert build.endswith(" src && docker image inspect --format . kiln/web-prod:a1b2c3d4e5f6 >/dev/null")
-    assert "-t kiln/web-prod:a1b2c3d4e5f6" in build
-    assert rm.startswith("docker ps -aq --filter label=kiln.instance=00000000-0000-0000-0000-000000000001")
+    assert build.endswith(" src && docker image inspect --format . slipway/web-prod:a1b2c3d4e5f6 >/dev/null")
+    assert "-t slipway/web-prod:a1b2c3d4e5f6" in build
+    assert rm.startswith("docker ps -aq --filter label=slipway.instance=00000000-0000-0000-0000-000000000001")
     assert "-p 8080:3000/tcp" in run and "-v /var/lib/web:/data" in run
-    assert "--env-file /opt/kiln/web-prod/shared/.env" in run
-    assert "--label kiln.instance=00000000-0000-0000-0000-000000000001" in run
+    assert "--env-file /opt/slipway/web-prod/shared/.env" in run
+    assert "--label slipway.instance=00000000-0000-0000-0000-000000000001" in run
 
 
 def test_compose_commands():
     inst = _instance(build_source="compose", compose_file="compose.yaml")
-    env_cmd, _, cmd = deployer.build_commands(inst, "/opt/kiln/web-prod/releases/x", SHA)
-    compose = "docker compose -p kiln-web-prod --env-file /opt/kiln/web-prod/shared/.env -f compose.yaml"
+    env_cmd, _, cmd = deployer.build_commands(inst, "/opt/slipway/web-prod/releases/x", SHA)
+    compose = "docker compose -p slipway-web-prod --env-file /opt/slipway/web-prod/shared/.env -f compose.yaml"
     assert f"{compose} up -d --build" in cmd
-    assert env_cmd.startswith("cd /opt/kiln/web-prod/releases/x &&")
-    assert "ln -sfn /opt/kiln/web-prod/shared/.env .env" in env_cmd
+    assert env_cmd.startswith("cd /opt/slipway/web-prod/releases/x &&")
+    assert "ln -sfn /opt/slipway/web-prod/shared/.env .env" in env_cmd
     assert deployer.control_command(inst, "stop").endswith(f"{compose} stop")
-    assert "rm -rf -- /opt/kiln/web-prod" in deployer.remove_dir_command(inst)
+    assert "rm -rf -- /opt/slipway/web-prod" in deployer.remove_dir_command(inst)
     with pytest.raises(ValueError):
         deployer.control_command(inst, "explode")
 
@@ -192,11 +192,11 @@ async def test_successful_deployment():
         assert dep.commit_sha == SHA and dep.commit_message == "feat: ship it"
         assert dep.instance.status == "running" and dep.instance.current_commit_sha == SHA
         assert "Step 1/3" in dep.log and "Deployment succeeded" in dep.log
-    release = f"/opt/kiln/web-prod/releases/a1b2c3d4e5f6-{dep_id.hex[:8]}"
-    assert remote.files["/opt/kiln/web-prod/shared/.env"] == "NODE_ENV=production\n"
-    assert remote.files[f"/opt/kiln/web-prod/releases/.upload-{dep_id.hex}.tar.gz"] == FakeGitHub.archive
+    release = f"/opt/slipway/web-prod/releases/a1b2c3d4e5f6-{dep_id.hex[:8]}"
+    assert remote.files["/opt/slipway/web-prod/shared/.env"] == "NODE_ENV=production\n"
+    assert remote.files[f"/opt/slipway/web-prod/releases/.upload-{dep_id.hex}.tar.gz"] == FakeGitHub.archive
     assert any("docker build" in c for c in remote.commands)
-    assert f"ln -sfn {release} /opt/kiln/web-prod/current" in remote.commands
+    assert f"ln -sfn {release} /opt/slipway/web-prod/current" in remote.commands
     assert FakeGitHub.calls[-3:] == ["repo 42", "commit 42@main", f"tarball 42@{SHA}"]
     # The GitHub token never appears in anything sent to the host.
     assert not any("token" in c.lower() for c in remote.commands)

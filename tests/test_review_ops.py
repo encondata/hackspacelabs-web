@@ -24,14 +24,14 @@ from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
 from sqlalchemy.engine import make_url
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from kiln import cli
-from kiln.core.config import Settings, get_settings
-from kiln.core.crypto import reset_crypto_cache
-from kiln.db.session import get_sessionmaker
-from kiln.main import check_encryption_key
-from kiln.models import AuditEvent, Host, Instance, OAuthAccount, Repository, User
-from kiln.schemas import InstanceUpdate
-from kiln.services.users import UserError
+from slipway import cli
+from slipway.core.config import Settings, get_settings
+from slipway.core.crypto import reset_crypto_cache
+from slipway.db.session import get_sessionmaker
+from slipway.main import check_encryption_key
+from slipway.models import AuditEvent, Host, Instance, OAuthAccount, Repository, User
+from slipway.schemas import InstanceUpdate
+from slipway.services.users import UserError
 from tests.conftest import PASSWORD, login, make_user
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -41,12 +41,12 @@ NEW_PASSWORD = "a-brand-new-password"
 
 @pytest.fixture
 def settings_env():
-    """Set KILN_* environment variables for one test and rebuild the cached settings and keys."""
+    """Set SLIPWAY_* environment variables for one test and rebuild the cached settings and keys."""
     saved: dict[str, str | None] = {}
 
     def apply(**values: str) -> None:
         for name, value in values.items():
-            key = f"KILN_{name}"
+            key = f"SLIPWAY_{name}"
             saved.setdefault(key, os.environ.get(key))
             os.environ[key] = value
         get_settings.cache_clear()
@@ -151,17 +151,17 @@ def _prompts(monkeypatch, password: str | None) -> list[str]:
     return asked
 
 
-def _kiln(*argv: str, **kwargs) -> subprocess.Popen:
+def _slipway(*argv: str, **kwargs) -> subprocess.Popen:
     """Run the real CLI against the test database, detached from any terminal (as in scripts and CI)."""
     env = {**os.environ, "PYTHONPATH": str(ROOT)}
     return subprocess.Popen(
-        [sys.executable, "-m", "kiln.cli", *argv], cwd=ROOT, env=env, start_new_session=True,
+        [sys.executable, "-m", "slipway.cli", *argv], cwd=ROOT, env=env, start_new_session=True,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs,
     )
 
 
 async def test_create_admin_reads_a_piped_password(client):
-    proc = _kiln("create-admin", "piped@example.com")
+    proc = _slipway("create-admin", "piped@example.com")
     out, err = proc.communicate(f"{NEW_PASSWORD}\n".encode(), timeout=60)
     assert proc.returncode == 0, err.decode()
     assert out.decode().strip() == "Created admin piped@example.com."
@@ -170,7 +170,7 @@ async def test_create_admin_reads_a_piped_password(client):
 
 
 async def test_create_admin_without_a_password_exits_cleanly():
-    proc = _kiln("create-admin", "nobody@example.com")
+    proc = _slipway("create-admin", "nobody@example.com")
     _, err = proc.communicate(b"", timeout=60)
     assert proc.returncode == 1
     assert "Error: No password given" in err.decode() and "Traceback" not in err.decode()
@@ -188,7 +188,7 @@ def _read_until(stream, marker: bytes, timeout: float = 60) -> None:
 
 
 async def test_create_admin_ctrl_c_at_the_prompt_stops_cleanly():
-    proc = _kiln("create-admin", "cancel@example.com")
+    proc = _slipway("create-admin", "cancel@example.com")
     try:
         _read_until(proc.stderr, b"Password (10+ characters): ")
         proc.send_signal(signal.SIGINT)
@@ -312,7 +312,7 @@ async def test_unreadable_secrets_load_as_none_instead_of_failing(client, settin
     await _store_secrets()
     settings_env(ENCRYPTION_KEY=K2)  # the old key is gone
 
-    with caplog.at_level(logging.ERROR, logger="kiln.core.crypto"):
+    with caplog.at_level(logging.ERROR, logger="slipway.core.crypto"):
         await login(client, "admin@example.com")
         assert (await client.get("/api/v1/auth/me")).status_code == 200
         assert (await client.get("/api/v1/auth/me")).status_code == 200
@@ -324,7 +324,7 @@ async def test_unreadable_secrets_load_as_none_instead_of_failing(client, settin
         host = await db.scalar(select(Host))
         assert host.private_key is None and host.password is None
 
-    messages = [r.getMessage() for r in caplog.records if r.name == "kiln.core.crypto"]
+    messages = [r.getMessage() for r in caplog.records if r.name == "slipway.core.crypto"]
     assert sum("oauth_accounts.access_token" in m for m in messages) == 1  # once per column
     assert any("hosts.private_key" in m for m in messages)
     assert not any(secret in caplog.text for secret in ("gho_secret", "PRIVATE", "abc"))
@@ -375,10 +375,10 @@ async def test_startup_check_reports_a_key_that_cannot_decrypt(settings_env, cap
         assert await check_encryption_key(db) is True
 
     settings_env(ENCRYPTION_KEY=K2)
-    with caplog.at_level(logging.ERROR, logger="kiln"):
+    with caplog.at_level(logging.ERROR, logger="slipway"):
         async with get_sessionmaker()() as db:
             assert await check_encryption_key(db) is False
-    assert "KILN_ENCRYPTION_KEY cannot decrypt stored secrets" in caplog.text
+    assert "SLIPWAY_ENCRYPTION_KEY cannot decrypt stored secrets" in caplog.text
 
     settings_env(ENCRYPTION_KEY=f"{K2},{K1}")
     async with get_sessionmaker()() as db:
@@ -415,39 +415,39 @@ def test_valid_encryption_keys_are_accepted():
 def test_log_level_is_case_insensitive(value, expected):
     level = _settings(log_level=value).log_level
     assert level == expected
-    logging.getLogger("kiln.test-level").setLevel(level)  # raised "Unknown level" for lowercase before
+    logging.getLogger("slipway.test-level").setLevel(level)  # raised "Unknown level" for lowercase before
 
 
 def test_log_level_rejects_unknown_names():
-    with pytest.raises(ValidationError, match="KILN_LOG_LEVEL"):
+    with pytest.raises(ValidationError, match="SLIPWAY_LOG_LEVEL"):
         _settings(log_level="loud")
 
 
 @pytest.mark.parametrize("password", ["ab@cd", "ab%41cd", "Xk9@q%2Fz!", "a/b:c#d?e"])
 def test_database_password_may_contain_url_special_characters(password):
-    settings = _settings(database_url="postgresql+asyncpg://kiln@db:5432/kiln", database_password=password)
+    settings = _settings(database_url="postgresql+asyncpg://slipway@db:5432/slipway", database_password=password)
     url = make_url(settings.database_url)
-    assert (url.password, url.host, url.database) == (password, "db", "kiln")
+    assert (url.password, url.host, url.database) == (password, "db", "slipway")
     assert PGDialect_asyncpg().create_connect_args(url)[1]["password"] == password
 
 
 def test_password_in_a_configured_database_url_wins():
-    url = "postgresql+asyncpg://kiln:ExternalPw@db.internal:5432/kiln"
-    settings = _settings(database_url=url, database_password="kiln")  # the compose default
+    url = "postgresql+asyncpg://slipway:ExternalPw@db.internal:5432/slipway"
+    settings = _settings(database_url=url, database_password="slipway")  # the compose default
     assert make_url(settings.database_url).password == "ExternalPw"
 
 
 def test_database_password_applies_to_the_default_url(monkeypatch):
-    monkeypatch.delenv("KILN_DATABASE_URL")
+    monkeypatch.delenv("SLIPWAY_DATABASE_URL")
     settings = _settings(database_password="p@ss/word")
     assert make_url(settings.database_url).password == "p@ss/word"
 
 
 def test_compose_passes_postgres_password_outside_the_url():
     compose = (ROOT / "docker-compose.yml").read_text()
-    url_line = next(line for line in compose.splitlines() if "KILN_DATABASE_URL:" in line)
+    url_line = next(line for line in compose.splitlines() if "SLIPWAY_DATABASE_URL:" in line)
     assert "POSTGRES_PASSWORD" not in url_line
-    assert "KILN_DATABASE_PASSWORD: ${POSTGRES_PASSWORD" in compose
+    assert "SLIPWAY_DATABASE_PASSWORD: ${POSTGRES_PASSWORD" in compose
 
 
 def test_generate_secrets_prints_url_safe_postgres_password(capsys):
@@ -455,7 +455,7 @@ def test_generate_secrets_prints_url_safe_postgres_password(capsys):
     values = dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
     password = values["POSTGRES_PASSWORD"]
     assert len(password) >= 24 and quote(password, safe="") == password
-    Fernet(values["KILN_ENCRYPTION_KEY"].encode())
+    Fernet(values["SLIPWAY_ENCRYPTION_KEY"].encode())
 
 
 # ---------------------------------------------------------------------- dependencies

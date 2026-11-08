@@ -9,10 +9,10 @@ import pytest
 
 from sqlalchemy import select, update
 
-from kiln.api.v1 import users as users_api
-from kiln.db.session import get_sessionmaker
-from kiln.models import Instance, InstanceStatus, Repository, Role, User
-from kiln.services.github import GitHubError
+from slipway.api.v1 import users as users_api
+from slipway.db.session import get_sessionmaker
+from slipway.models import Instance, InstanceStatus, Repository, Role, User
+from slipway.services.github import GitHubError
 from tests.conftest import login, make_user
 
 
@@ -139,7 +139,7 @@ async def test_destroy_buttons_disabled_while_deploying(admin_client):
 
 async def test_list_pages_render_without_loading_build_logs(admin_client):
     inst_id = await _instance(admin_client)
-    from kiln.models import Deployment
+    from slipway.models import Deployment
 
     async with get_sessionmaker()() as db:
         db.add(Deployment(instance_id=uuid.UUID(inst_id), status="succeeded", branch="main", commit_sha="a" * 40, log="x" * 1000))
@@ -150,32 +150,32 @@ async def test_list_pages_render_without_loading_build_logs(admin_client):
 
 # ---------------------------------------------------------- second review round follow-ups
 
-from kiln import cli  # noqa: E402
-from kiln.api.v1.instances import env_unreadable  # noqa: E402
-from kiln.models.repository import DEFAULT_BRANCH_TOO_LONG  # noqa: E402
+from slipway import cli  # noqa: E402
+from slipway.api.v1.instances import env_unreadable  # noqa: E402
+from slipway.models.repository import DEFAULT_BRANCH_TOO_LONG  # noqa: E402
 from tests.test_review_ops import K1, K2, _store_secrets  # noqa: E402
 
 
 @pytest.fixture
 def key_env():
-    """Switch KILN_ENCRYPTION_KEY for one test, rebuilding the cached settings and keys."""
+    """Switch SLIPWAY_ENCRYPTION_KEY for one test, rebuilding the cached settings and keys."""
     import os
 
-    from kiln.core.config import get_settings
-    from kiln.core.crypto import reset_crypto_cache
+    from slipway.core.config import get_settings
+    from slipway.core.crypto import reset_crypto_cache
 
-    saved = os.environ.get("KILN_ENCRYPTION_KEY")
+    saved = os.environ.get("SLIPWAY_ENCRYPTION_KEY")
 
     def apply(key: str) -> None:
-        os.environ["KILN_ENCRYPTION_KEY"] = key
+        os.environ["SLIPWAY_ENCRYPTION_KEY"] = key
         get_settings.cache_clear()
         reset_crypto_cache()
 
     yield apply
     if saved is None:
-        os.environ.pop("KILN_ENCRYPTION_KEY", None)
+        os.environ.pop("SLIPWAY_ENCRYPTION_KEY", None)
     else:
-        os.environ["KILN_ENCRYPTION_KEY"] = saved
+        os.environ["SLIPWAY_ENCRYPTION_KEY"] = saved
     get_settings.cache_clear()
     reset_crypto_cache()
 

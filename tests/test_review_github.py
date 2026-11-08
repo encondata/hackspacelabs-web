@@ -15,14 +15,14 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from kiln.api.v1 import repositories as repositories_api
-from kiln.core.config import get_settings
-from kiln.db.session import get_sessionmaker
-from kiln.models import OAuthAccount, Repository, User
-from kiln.services.github import GitHubClient, GitHubError, exchange_code
-from kiln.services.repos import GitHubNotLinked, github_token_for, sync_repositories
-from kiln.services.users import create_user
-from kiln.web import oauth
+from slipway.api.v1 import repositories as repositories_api
+from slipway.core.config import get_settings
+from slipway.db.session import get_sessionmaker
+from slipway.models import OAuthAccount, Repository, User
+from slipway.services.github import GitHubClient, GitHubError, exchange_code
+from slipway.services.repos import GitHubNotLinked, github_token_for, sync_repositories
+from slipway.services.users import create_user
+from slipway.web import oauth
 from tests.conftest import login, make_user
 
 SHA = "a" * 40
@@ -174,9 +174,9 @@ async def test_unsigned_link_cookie_cannot_link_victim(make_client, gh):
     await make_user("victim@example.com")
     victim = make_client()
     await login(victim, "victim@example.com")
-    session = victim.cookies["kiln_session"]
+    session = victim.cookies["slipway_session"]
     forged = _forge({"s": "attacker-chosen-state", "m": "link", "n": "/settings"})
-    r = await _callback(victim, "attacker-chosen-state", f"kiln_session={session}; kiln_oauth={forged}")
+    r = await _callback(victim, "attacker-chosen-state", f"slipway_session={session}; slipway_oauth={forged}")
     assert "error=state" in r.headers["location"]
     assert (await _me(victim))["github_login"] is None
 
@@ -189,7 +189,7 @@ async def test_link_state_from_another_session_is_rejected(make_client, gh):
     await login(victim, "victim@example.com")
     state = await _start(attacker, "/auth/github/link")
     tossed = attacker.cookies[oauth.STATE_COOKIE]
-    r = await _callback(victim, state, f"kiln_session={victim.cookies['kiln_session']}; kiln_oauth={tossed}")
+    r = await _callback(victim, state, f"slipway_session={victim.cookies['slipway_session']}; slipway_oauth={tossed}")
     assert r.headers["location"] == "/settings?error=state"
     assert (await _me(victim))["github_login"] is None
     assert (await _me(attacker))["github_login"] is None
@@ -199,7 +199,7 @@ async def test_link_without_session_reports_session_expired(client, gh):
     await make_user("admin@example.com")
     await login(client, "admin@example.com")
     state = await _start(client, "/auth/github/link")
-    r = await _callback(client, state, f"kiln_oauth={client.cookies[oauth.STATE_COOKIE]}")
+    r = await _callback(client, state, f"slipway_oauth={client.cookies[oauth.STATE_COOKIE]}")
     assert r.headers["location"] == "/login?error=session_expired"
 
 
@@ -209,7 +209,7 @@ async def test_signed_cookie_mode_cannot_be_changed(client, gh):
     body, _, sig = client.cookies[oauth.STATE_COOKIE].strip('"').partition(".")
     payload = json.loads(base64.urlsafe_b64decode(body))
     tampered = f"{_forge({**payload, 'm': 'link', 'n': '/evil'})}.{sig}"
-    r = await _callback(client, state, f"kiln_oauth={tampered}")
+    r = await _callback(client, state, f"slipway_oauth={tampered}")
     assert r.headers["location"] == "/login?error=state"
 
 
@@ -239,13 +239,13 @@ async def test_non_ascii_state_fails_cleanly(client, gh):
 
 @pytest.mark.parametrize("cookie", [_forge([]), "not-base64!!", "%C3%A9.%C3%A9", "é.é"])
 async def test_malformed_state_cookie_fails_cleanly(client, gh, cookie):
-    r = await _callback(client, "abc", f"kiln_oauth={cookie}".encode())
+    r = await _callback(client, "abc", f"slipway_oauth={cookie}".encode())
     assert r.status_code == 302 and r.headers["location"] == "/login?error=state"
 
 
 async def test_signed_cookie_that_is_not_an_object_fails_cleanly(client, gh):
     body = _forge(["abc"])
-    r = await _callback(client, "abc", f"kiln_oauth={body}.{oauth._sign('cookie', body)}")
+    r = await _callback(client, "abc", f"slipway_oauth={body}.{oauth._sign('cookie', body)}")
     assert r.status_code == 302 and r.headers["location"] == "/login?error=state"
 
 

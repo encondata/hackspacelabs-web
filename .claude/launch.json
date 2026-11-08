@@ -2,15 +2,15 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "kiln",
+      "name": "slipway",
       "runtimeExecutable": "sh",
       "runtimeArgs": ["scripts/dev.sh"],
       "port": 8000
     },
     {
-      "name": "kiln-demo",
+      "name": "slipway-demo",
       "runtimeExecutable": "env",
-      "runtimeArgs": ["PORT=8001", "KILN_BASE_URL=http://localhost:8001", "KILN_DATABASE_URL=sqlite+aiosqlite:///data/kiln-demo.db", "sh", "scripts/dev.sh"],
+      "runtimeArgs": ["PORT=8001", "SLIPWAY_BASE_URL=http://localhost:8001", "SLIPWAY_DATABASE_URL=sqlite+aiosqlite:///data/slipway-demo.db", "sh", "scripts/dev.sh"],
       "port": 8001
     }
   ]

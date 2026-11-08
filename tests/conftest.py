@@ -1,4 +1,4 @@
-"""Test fixtures. Tests run against SQLite; set KILN_TEST_DATABASE_URL to use PostgreSQL."""
+"""Test fixtures. Tests run against SQLite; set SLIPWAY_TEST_DATABASE_URL to use PostgreSQL."""
 
 from __future__ import annotations
 
@@ -7,35 +7,35 @@ import tempfile
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
-_tmp = Path(tempfile.mkdtemp(prefix="kiln-tests-"))
+_tmp = Path(tempfile.mkdtemp(prefix="slipway-tests-"))
 os.environ.update(
-    KILN_ENV_FILE="",  # never read the developer's .env
-    KILN_ENV="test",
-    KILN_DATABASE_URL=os.environ.get("KILN_TEST_DATABASE_URL", f"sqlite+aiosqlite:///{_tmp}/test.db"),
-    KILN_SECRET_KEY="test-secret-key-that-is-long-enough-1234567890",
-    KILN_HOST_POLL_INTERVAL="0",
-    KILN_GITHUB_CLIENT_ID="test-client",
-    KILN_GITHUB_CLIENT_SECRET="test-secret",
-    KILN_BASE_URL="http://testserver",
-    KILN_ALLOW_SIGNUP="false",
+    SLIPWAY_ENV_FILE="",  # never read the developer's .env
+    SLIPWAY_ENV="test",
+    SLIPWAY_DATABASE_URL=os.environ.get("SLIPWAY_TEST_DATABASE_URL", f"sqlite+aiosqlite:///{_tmp}/test.db"),
+    SLIPWAY_SECRET_KEY="test-secret-key-that-is-long-enough-1234567890",
+    SLIPWAY_HOST_POLL_INTERVAL="0",
+    SLIPWAY_GITHUB_CLIENT_ID="test-client",
+    SLIPWAY_GITHUB_CLIENT_SECRET="test-secret",
+    SLIPWAY_BASE_URL="http://testserver",
+    SLIPWAY_ALLOW_SIGNUP="false",
 )
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 
-from kiln.core import ratelimit  # noqa: E402
-from kiln.db.base import Base  # noqa: E402
-from kiln.db.session import get_engine, get_sessionmaker, init_engine  # noqa: E402
-from kiln.main import create_app  # noqa: E402
-from kiln.models import User  # noqa: E402
-from kiln.services.users import bootstrap, create_user  # noqa: E402
+from slipway.core import ratelimit  # noqa: E402
+from slipway.db.base import Base  # noqa: E402
+from slipway.db.session import get_engine, get_sessionmaker, init_engine  # noqa: E402
+from slipway.main import create_app  # noqa: E402
+from slipway.models import User  # noqa: E402
+from slipway.services.users import bootstrap, create_user  # noqa: E402
 
 PASSWORD = "correct-horse-battery"
 
 
 @pytest.fixture(scope="session")
 def app():
-    init_engine(os.environ["KILN_DATABASE_URL"])
+    init_engine(os.environ["SLIPWAY_DATABASE_URL"])
     return create_app()
 
 

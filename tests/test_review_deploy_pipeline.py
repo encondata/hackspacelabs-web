@@ -16,14 +16,14 @@ from contextlib import asynccontextmanager, contextmanager
 import pytest
 from sqlalchemy import event, select, text
 
-from kiln.api.v1 import instances as instances_api
-from kiln.core import crypto
-from kiln.core.permissions import PERMISSION_DESCRIPTIONS, Perm
-from kiln.db.base import utcnow
-from kiln.db.session import get_engine, get_sessionmaker
-from kiln.models import AuditEvent, Deployment, Host, Instance, Repository
-from kiln.services import deployer, ssh
-from kiln.services.github import CommitInfo, GitHubError
+from slipway.api.v1 import instances as instances_api
+from slipway.core import crypto
+from slipway.core.permissions import PERMISSION_DESCRIPTIONS, Perm
+from slipway.db.base import utcnow
+from slipway.db.session import get_engine, get_sessionmaker
+from slipway.models import AuditEvent, Deployment, Host, Instance, Repository
+from slipway.services import deployer, ssh
+from slipway.services.github import CommitInfo, GitHubError
 from tests.test_deployer import SHA, FakeGitHub, FakeRemote, _connect, _instance, _seed
 
 FAKE_DOCKER = """#!/bin/sh
@@ -230,26 +230,26 @@ async def test_host_change_refused_while_a_deploy_task_is_pending(admin_client, 
 def test_teardown_removes_both_modes(source):
     inst = _instance(build_source=source)
     cmd = deployer.teardown_command(inst)
-    label = "label=kiln.instance=00000000-0000-0000-0000-000000000001"
+    label = "label=slipway.instance=00000000-0000-0000-0000-000000000001"
     assert f"docker ps -aq --filter {label} | xargs -r docker rm -f -v" in cmd
-    assert "docker compose -p kiln-web-prod rm -f -s -v" in cmd
-    assert "docker compose -p kiln-web-prod down --remove-orphans" in cmd
+    assert "docker compose -p slipway-web-prod rm -f -s -v" in cmd
+    assert "docker compose -p slipway-web-prod down --remove-orphans" in cmd
     assert "--rmi local" in cmd
     assert f"docker image ls -aq --filter {label}" in cmd  # also catches dangling images
-    assert "docker rm -f kiln-web-prod" not in cmd
+    assert "docker rm -f slipway-web-prod" not in cmd
 
 
 def test_each_mode_removes_the_other_modes_leftovers():
-    label = "label=kiln.instance=00000000-0000-0000-0000-000000000001"
+    label = "label=slipway.instance=00000000-0000-0000-0000-000000000001"
     _, cleanup, _ = deployer.build_commands(_instance(), "/r", SHA)
     assert f"docker ps -aq --filter {label} | xargs -r docker rm -f -v" in cleanup
-    assert "docker compose -p kiln-web-prod down --remove-orphans" in cleanup
+    assert "docker compose -p slipway-web-prod down --remove-orphans" in cleanup
     _, cleanup, up = deployer.build_commands(_instance(build_source="compose"), "/r", SHA)
     assert f"docker ps -aq --filter {label} | xargs -r docker rm -f -v" in cleanup and "up -d" in up
 
 
 def test_dockerfile_mode_never_touches_another_instances_container(fake_docker):
-    # A compose instance 'shop' owns kiln-shop-web-1, the container_name of a Dockerfile instance 'shop-web-1'.
+    # A compose instance 'shop' owns slipway-shop-web-1, the container_name of a Dockerfile instance 'shop-web-1'.
     env, log = fake_docker
     env = {**env, "FAKE_OWNER": "some-other-instance-id"}
     inst = _instance(slug="shop-web-1")
@@ -264,13 +264,13 @@ def test_dockerfile_mode_never_touches_another_instances_container(fake_docker):
     assert not any(c.startswith(("rm", "stop", "logs")) for c in calls), calls
     # The instance's own container is still controlled by name.
     assert _sh(deployer.control_command(inst, "stop"), {**env, "FAKE_OWNER": str(inst.id)}).returncode == 0
-    assert log.read_text().splitlines()[-1] == "stop kiln-shop-web-1"
+    assert log.read_text().splitlines()[-1] == "stop slipway-shop-web-1"
 
 
 def test_prune_removes_dangling_and_superseded_images():
-    cmd = deployer.prune_command(_instance(), "/opt/kiln/web-prod/releases/a1b2c3d4e5f6-0000abcd")
-    assert "docker image prune -f --filter label=kiln.instance=00000000-0000-0000-0000-000000000001" in cmd
-    assert "docker image prune -f --filter label=com.docker.compose.project=kiln-web-prod" in cmd
+    cmd = deployer.prune_command(_instance(), "/opt/slipway/web-prod/releases/a1b2c3d4e5f6-0000abcd")
+    assert "docker image prune -f --filter label=slipway.instance=00000000-0000-0000-0000-000000000001" in cmd
+    assert "docker image prune -f --filter label=com.docker.compose.project=slipway-web-prod" in cmd
     assert "tail -n +4 | xargs -r docker image rm" in cmd
 
 
@@ -365,7 +365,7 @@ async def test_ssh_calls_do_not_hold_a_db_connection(admin_client, monkeypatch):
 
     async def fake_run(instance, command, **kw):
         held.append(get_engine().pool.checkedout())
-        return '{"Names": "kiln-web-prod"}'
+        return '{"Names": "slipway-web-prod"}'
 
     async def fake_destroy(instance, **kw):
         held.append(get_engine().pool.checkedout())
@@ -392,15 +392,15 @@ async def test_same_sha_redeploy_never_touches_the_live_release():
         second = Deployment(instance_id=dep.instance_id, branch="main", log="")
         db.add(second)
         await db.commit()
-    live = f"/opt/kiln/web-prod/releases/a1b2c3d4e5f6-{first.hex[:8]}"
+    live = f"/opt/slipway/web-prod/releases/a1b2c3d4e5f6-{first.hex[:8]}"
     start = len(remote.commands)
     await deployer.run_deployment(second.id, connect=_connect(remote), github=FakeGitHub)
     assert (await _get(Deployment, second.id)).status == "succeeded"
 
-    new = f"/opt/kiln/web-prod/releases/a1b2c3d4e5f6-{second.id.hex[:8]}"
+    new = f"/opt/slipway/web-prod/releases/a1b2c3d4e5f6-{second.id.hex[:8]}"
     later = remote.commands[start:]
     assert not any(live in c for c in later)
-    switch = later.index(f"ln -sfn {new} /opt/kiln/web-prod/current")
+    switch = later.index(f"ln -sfn {new} /opt/slipway/web-prod/current")
     assert switch > max(i for i, c in enumerate(later) if c.startswith("docker run"))
 
 
@@ -447,7 +447,7 @@ def test_prune_removes_stale_uploads(tmp_path, fake_docker):
 
 
 def _release_and_upload(dep_id: uuid.UUID) -> tuple[str, str]:
-    releases = "/opt/kiln/web-prod/releases"
+    releases = "/opt/slipway/web-prod/releases"
     return f"{releases}/a1b2c3d4e5f6-{dep_id.hex[:8]}", f"{releases}/.upload-{dep_id.hex}.tar.gz"
 
 
@@ -487,7 +487,7 @@ async def test_failed_compose_up_keeps_a_release_its_containers_use():
         async def run(self, command, *, check=True, on_line=None, timeout=None):
             if "com.docker.compose.project.working_dir" in command:
                 self.commands.append(command)
-                return 0, f"{DOCKER_WARNING}\n/opt/kiln/web-prod/releases/older/docker\n{release}/docker\n"
+                return 0, f"{DOCKER_WARNING}\n/opt/slipway/web-prod/releases/older/docker\n{release}/docker\n"
             return await super().run(command, check=check, on_line=on_line, timeout=timeout)
 
     remote = HalfUp(fail_on=" up -d")
@@ -617,15 +617,15 @@ async def test_delete_with_leftover_files_deletes_row_and_reports(admin_client, 
     inst_id, _, _ = await _add_instance("running", deployment={"status": "succeeded", "started_at": utcnow()})
 
     async def partial_destroy(instance, **kw):
-        return "Could not remove /opt/kiln/web-prod on prod-01; delete it by hand"
+        return "Could not remove /opt/slipway/web-prod on prod-01; delete it by hand"
 
     monkeypatch.setattr(deployer, "destroy", partial_destroy)
     r = await admin_client.delete(f"/api/v1/instances/{inst_id}")
-    assert r.status_code == 200 and "/opt/kiln/web-prod" in r.json()["warning"]
+    assert r.status_code == 200 and "/opt/slipway/web-prod" in r.json()["warning"]
     assert await _get(Instance, inst_id) is None
     async with get_sessionmaker()() as db:
         ev = await db.scalar(select(AuditEvent).where(AuditEvent.action == "instance.delete"))
-        assert "/opt/kiln/web-prod" in ev.summary and ev.details["warning"]
+        assert "/opt/slipway/web-prod" in ev.summary and ev.details["warning"]
 
 
 # ------------------------------------------------------------ compose env (44, 45, 54)
@@ -633,9 +633,9 @@ async def test_delete_with_leftover_files_deletes_row_and_reports(admin_client, 
 
 def test_compose_commands_pass_the_env_file_everywhere():
     inst = _instance(build_source="compose", compose_file="docker/compose.yml")
-    flag = "--env-file /opt/kiln/web-prod/shared/.env -f docker/compose.yml"
-    env_cmd, _, up = deployer.build_commands(inst, "/opt/kiln/web-prod/releases/x", SHA)
-    assert env_cmd.startswith("cd /opt/kiln/web-prod/releases/x/docker &&")
+    flag = "--env-file /opt/slipway/web-prod/shared/.env -f docker/compose.yml"
+    env_cmd, _, up = deployer.build_commands(inst, "/opt/slipway/web-prod/releases/x", SHA)
+    assert env_cmd.startswith("cd /opt/slipway/web-prod/releases/x/docker &&")
     for cmd in (up, deployer.control_command(inst, "restart"), deployer.logs_command(inst), deployer.teardown_command(inst)):
         assert flag in cmd, cmd
 
@@ -650,7 +650,7 @@ def test_compose_env_merge_keeps_repo_defaults(tmp_path, fake_docker):
     (release / "docker" / ".env").write_text("PG_VERSION=16\nSECRET_KEY=from-repo")  # no trailing newline
     shared = root / "web-prod" / "shared"
     shared.mkdir()
-    (shared / "kiln.env").write_text(deployer.render_compose_env({"SECRET_KEY": "pa$sw0rd #1"}))
+    (shared / "slipway.env").write_text(deployer.render_compose_env({"SECRET_KEY": "pa$sw0rd #1"}))
     (shared / ".env").write_text("OLD=1\n")
     (shared / ".env").chmod(0o644)
 
@@ -669,9 +669,9 @@ async def test_compose_deploy_writes_quoted_values_then_merges():
     remote = FakeRemote()
     await deployer.run_deployment(dep_id, connect=_connect(remote), github=FakeGitHub)
     assert (await _get(Deployment, dep_id)).status == "succeeded"
-    assert remote.files["/opt/kiln/web-prod/shared/kiln.env"] == "DB_PASSWORD='pa$sw0rd #1'\n"
-    assert "/opt/kiln/web-prod/shared/.env" not in remote.files  # built on the host from the repo's .env + kiln.env
-    merge = next(i for i, c in enumerate(remote.commands) if "cat /opt/kiln/web-prod/shared/kiln.env" in c)
+    assert remote.files["/opt/slipway/web-prod/shared/slipway.env"] == "DB_PASSWORD='pa$sw0rd #1'\n"
+    assert "/opt/slipway/web-prod/shared/.env" not in remote.files  # built on the host from the repo's .env + slipway.env
+    merge = next(i for i, c in enumerate(remote.commands) if "cat /opt/slipway/web-prod/shared/slipway.env" in c)
     up = next(i for i, c in enumerate(remote.commands) if " up -d --build" in c)
     switch = next(i for i, c in enumerate(remote.commands) if c.startswith("ln -sfn") and c.endswith("/current"))
     assert merge < up < switch
@@ -838,7 +838,7 @@ async def test_env_never_set_deploys_with_no_variables():
     remote = FakeRemote()
     await deployer.run_deployment(dep_id, connect=_connect(remote), github=FakeGitHub)
     assert (await _get(Deployment, dep_id)).status == "succeeded"
-    assert remote.files["/opt/kiln/web-prod/shared/.env"] == ""
+    assert remote.files["/opt/slipway/web-prod/shared/.env"] == ""
 
 
 async def test_env_that_decrypts_to_nothing_fails_the_deploy(fast_retries, monkeypatch):

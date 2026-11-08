@@ -1,0 +1,88 @@
+{% from "_macros.html" import icon, logo, mountains, avatar %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Slipway{% endblock %} · Slipway</title>
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
+  <link rel="stylesheet" href="/static/css/slipway.css?v={{ version }}">
+  <script src="/static/js/theme.js?v={{ version }}"></script>
+  <script src="/static/js/slipway.js?v={{ version }}" defer></script>
+</head>
+<body>
+{% block body %}
+{% set nav = [
+  ("/", "home", "Overview", None),
+  ("/repositories", "repositories", "Repositories", Perm.REPOS_READ),
+  ("/deployments", "rocket", "Deployments", Perm.DEPLOYMENTS_READ),
+  ("/hosts", "hosts", "Hosts", Perm.HOSTS_READ),
+  ("/instances", "instances", "Instances", Perm.INSTANCES_READ),
+  ("/analytics", "analytics", "Analytics", Perm.ANALYTICS_READ),
+  ("/logs", "logs", "Logs", Perm.LOGS_READ),
+] %}
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="/">{{ logo() }}</a>
+    <nav class="nav" aria-label="Main">
+      {% for href, ic, label, perm in nav if perm is none or auth.can(perm) %}
+      <a href="{{ href }}" class="{{ 'active' if path == href or (href != '/' and path.startswith(href)) }}">{{ icon(ic) }} {{ label }}</a>
+      {% endfor %}
+      <hr>
+      <a href="/settings" class="{{ 'active' if path.startswith('/settings') }}">{{ icon("settings") }} Settings</a>
+    </nav>
+    <div class="sidebar-art">
+      {{ mountains() }}
+      <div class="tagline"><strong>Slipway</strong><span><em>Deploy.</em> Run. Observe.</span></div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-toggle" type="button" aria-label="Open navigation">{{ icon("menu") }}</button>
+      <form class="search" action="/search" role="search">
+        {{ icon("search") }}
+        <input name="q" value="{{ q if q is defined else '' }}" placeholder="Search repositories, instances, hosts…" aria-label="Search">
+        <kbd>⌘K</kbd>
+      </form>
+      <div class="topbar-right">
+        {% if user.github %}
+        <a class="pill" href="{{ '/repositories' if auth.can(Perm.REPOS_READ) else '/settings' }}" title="Signed in to GitHub as @{{ user.github.login }}">
+          {{ icon("github") }} GitHub
+          <span class="meta"><span class="dot success"></span>{% if last_sync %}Synced {{ last_sync|timeago }}{% else %}Not synced yet{% endif %}</span>
+        </a>
+        {% elif settings.github_enabled %}
+        <a class="pill" href="/auth/github/link">{{ icon("github") }} Connect GitHub</a>
+        {% else %}
+        <a class="pill" href="/settings" title="Set SLIPWAY_GITHUB_CLIENT_ID / _SECRET to enable GitHub">{{ icon("github") }} <span class="meta"><span class="dot"></span>GitHub not configured</span></a>
+        {% endif %}
+        <button class="icon-btn" type="button" data-theme-toggle aria-label="Toggle light/dark theme" title="Toggle theme">{{ icon("moon") }}</button>
+        <details class="usermenu">
+          <summary>
+            {{ avatar(user) }}
+            <span class="who"><strong>{{ user.display_name }}</strong><span>{{ user.role_names|join(", ")|title or "No role" }}</span></span>
+            {{ icon("chevron-down", "i-sm") }}
+          </summary>
+          <div class="menu-panel">
+            <div class="label">{{ user.email }}</div>
+            <a href="/settings">{{ icon("user") }} Profile</a>
+            <a href="/settings/tokens">{{ icon("key") }} API tokens</a>
+            {% if auth.can(Perm.USERS_READ) %}<a href="/settings/users">{{ icon("users") }} Users &amp; roles</a>{% endif %}
+            <a href="/api/docs">{{ icon("file") }} API docs</a>
+            <hr style="margin: 6px 0">
+            <button type="button" data-api="POST /api/v1/auth/logout" data-then="redirect:/login">{{ icon("logout") }} Sign out</button>
+          </div>
+        </details>
+      </div>
+    </header>
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% endblock %}
+<div id="toasts" class="toasts" aria-live="polite"></div>
+</body>
+</html>
