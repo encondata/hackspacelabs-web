@@ -1,7 +1,9 @@
 # Slipway + PostgreSQL. Usage:
+#   curl -fsSL https://raw.githubusercontent.com/encondata/slipway/main/install.sh | bash
+# or by hand:
 #   cp .env.example .env   # then fill in secrets (slipway generate-secrets) and GitHub OAuth app
 #   docker compose up -d --build
-# A fixed project name keeps container and volume names (slipway-*, slipway_pgdata) independent of the folder name.
+# A fixed project name keeps container names (slipway-*) independent of the folder name.
 name: slipway
 
 services:
@@ -13,7 +15,9 @@ services:
       POSTGRES_USER: slipway
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-slipway}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # The database lives in a plain folder (default ./data/postgres) so it can be backed up with the
+      # install; set SLIPWAY_DATA_DIR in .env to keep it elsewhere, such as an Unraid array share.
+      - ${SLIPWAY_DATA_DIR:-./data}/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U slipway -d slipway"]
       interval: 5s
@@ -41,5 +45,3 @@ services:
     ports:
       - "${SLIPWAY_PORT:-8000}:8000"
 
-volumes:
-  pgdata:

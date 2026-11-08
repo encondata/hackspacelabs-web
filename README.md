@@ -27,7 +27,24 @@ vanilla JS (no Node build) · **asyncssh** · shipped as a **Docker** image.
 | Audit | Sign-ins, failed logins and password checks, user/role/token/host/instance/deploy actions with actor and IP |
 | UI | Light and dark themes from your mockups and asset pack, responsive down to phone width |
 
-## Quick start (Docker)
+## Install on a server
+
+On a Linux machine with Docker and Compose v2:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/encondata/slipway/main/install.sh | bash
+```
+
+It asks where to install (default `~/slipway`, or `/mnt/user/slipway` on Unraid) and the address people
+will use, clones the repository, writes `.env` with fresh secrets and an administrator account, builds the
+image and starts Slipway with PostgreSQL. The database lives in `data/postgres` inside the install folder
+(set `SLIPWAY_DATA_DIR` in `.env` to move it). Run the same command again to update: it keeps `.env` and the
+data, and only prints the admin password while it still works. `SLIPWAY_DIR`, `SLIPWAY_BASE_URL`,
+`SLIPWAY_PORT` and `SLIPWAY_ADMIN_EMAIL` answer the questions up front; `SLIPWAY_REPO` and
+`SLIPWAY_BRANCH` pick another source. Slipway serves plain HTTP on port 8000 for a TLS reverse proxy.
+GitHub sign-in needs an OAuth app: the installer's `.env` says where to put its ID and secret.
+
+## Quick start (Docker, by hand)
 
 ```bash
 cp .env.example .env
@@ -38,7 +55,7 @@ docker compose up -d --build
 
 Open `SLIPWAY_BASE_URL` and sign in. Migrations run automatically on container start.
 `POSTGRES_PASSWORD` may contain any character: compose passes it to Slipway as `SLIPWAY_DATABASE_PASSWORD`
-instead of putting it in the URL. (Changing it after the database volume exists does not change the
+instead of putting it in the URL. (Changing it after the database exists does not change the
 Postgres user's password.) Outside compose, set `SLIPWAY_DATABASE_URL` and `SLIPWAY_DATABASE_PASSWORD`;
 a password written into the URL itself takes precedence.
 
