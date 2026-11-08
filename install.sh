@@ -10,6 +10,11 @@
 # Slipway serves plain HTTP on port 8000 and expects a reverse proxy in front of it for TLS.
 set -euo pipefail
 
+# Under curl | bash, bash reads this script from standard input while it runs, so a command
+# that also reads standard input would swallow the rest of it. Everything is in main(), which
+# bash reads in full before running any of it.
+main() {
+
 REPO="${SLIPWAY_REPO:-https://github.com/encondata/slipway.git}"
 BRANCH="${SLIPWAY_BRANCH:-main}"
 
@@ -172,7 +177,7 @@ fi
 # What the database holds, so an update can be seen to have kept everything.
 HELD="$(docker compose exec -T db psql -U slipway -d slipway -Atc \
   "SELECT (SELECT count(*) FROM hosts) || ' hosts, ' || (SELECT count(*) FROM instances) || ' instances, ' ||
-          (SELECT count(*) FROM users) || ' accounts'" 2>/dev/null || true)"
+          (SELECT count(*) FROM users) || ' accounts'" </dev/null 2>/dev/null || true)"
 DATA_DIR="$(env_value SLIPWAY_DATA_DIR)"; DATA_DIR="${DATA_DIR:-$DIR/data}"
 GITHUB="not set up yet (see the GitHub lines in $DIR/.env)"
 [ -n "$(env_value SLIPWAY_GITHUB_CLIENT_ID)" ] && GITHUB="configured"
@@ -218,3 +223,6 @@ cat <<TAIL
   Logs     docker compose -f $DIR/docker-compose.yml logs -f
   Stop     docker compose -f $DIR/docker-compose.yml down
 TAIL
+}
+
+main "$@"
