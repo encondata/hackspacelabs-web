@@ -1,3 +1,5 @@
+import pytest
+
 from slipway.core.permissions import has_permission, validate_permissions
 from tests.conftest import PASSWORD, login, make_user
 
@@ -94,3 +96,31 @@ def test_permission_matching():
     assert not has_permission(frozenset({"hosts:read"}), "hosts:write")
     assert not has_permission(frozenset({"repos:*"}), "hosts:read")
     assert validate_permissions(["hosts:read", "hosts:read", "repos:*"]) == ["hosts:read", "repos:*"]
+
+
+@pytest.mark.parametrize(
+    ("base_url", "client_url", "secure"),
+    [
+        # Opened directly over http while the base URL is the proxy's https address: a Secure cookie would be
+        # dropped by the browser and every sign-in would silently fail.
+        ("https://slipway.example.com", "http://192.168.1.20:8000", False),
+        # Through a proxy (Host is the public name) even when its forwarded scheme isn't trusted.
+        ("https://slipway.example.com", "http://slipway.example.com", True),
+        ("https://slipway.example.com", "https://192.168.1.20:8000", True),
+        ("http://localhost:8000", "http://192.168.1.20:8000", False),
+    ],
+)
+async def test_session_cookie_is_secure_only_where_the_browser_will_keep_it(app, base_url, client_url, secure, monkeypatch):
+    import httpx
+
+    from slipway.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "base_url", base_url)
+    await make_user("cookie@example.com")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 123))
+    async with httpx.AsyncClient(transport=transport, base_url=client_url) as c:
+        r = await c.post("/api/v1/auth/login", json={"email": "cookie@example.com", "password": PASSWORD})
+    assert r.status_code == 200
+    cookie = r.headers["set-cookie"]
+    assert cookie.startswith("slipway_session=")
+    assert ("; secure" in cookie.lower()) is secure

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Literal
+from urllib.parse import urlsplit
 
 from fastapi import Request, Response
 from sqlalchemy import delete, select
@@ -87,14 +88,25 @@ async def create_session(db: AsyncSession, user: User, request: Request | None) 
     return raw, session
 
 
-def set_session_cookie(response: Response, raw_token: str) -> None:
+def cookie_secure(request: Request) -> bool:
+    """Mark the session cookie Secure for requests that arrived over https, or that are addressed to an https
+    SLIPWAY_BASE_URL host (through a proxy whose forwarded scheme isn't trusted). A browser drops a Secure cookie
+    sent over plain http, so opening Slipway directly (http://<server>:8000) with an https base URL must get a
+    plain one, or every sign-in silently fails."""
+    if request.url.scheme == "https":
+        return True
+    settings = get_settings()
+    return settings.secure_cookies and request.url.hostname == urlsplit(settings.base_url).hostname
+
+
+def set_session_cookie(response: Response, raw_token: str, request: Request) -> None:
     settings = get_settings()
     response.set_cookie(
         SESSION_COOKIE,
         raw_token,
         max_age=settings.session_ttl_hours * 3600,
         httponly=True,
-        secure=settings.secure_cookies,
+        secure=cookie_secure(request),
         samesite="lax",
         path="/",
     )

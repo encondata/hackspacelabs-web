@@ -67,7 +67,7 @@ async def login(body: LoginIn, request: Request, response: Response, db: DB) -> 
     raw, session = await create_session(db, user, request)
     audit.record(db, "auth.login", actor=user, target=user, summary="Signed in with password", request=request)
     await db.commit()
-    set_session_cookie(response, raw)
+    set_session_cookie(response, raw, request)
     return SessionOut(user=UserOut.of(user), csrf_token=session.csrf_token)
 
 
@@ -101,7 +101,7 @@ async def register(body: RegisterIn, request: Request, response: Response, db: D
     raw, session = await create_session(db, user, request)
     audit.record(db, "user.register", actor=user, target=user, summary=f"Registered {user.email}", request=request)
     await db.commit()
-    set_session_cookie(response, raw)
+    set_session_cookie(response, raw, request)
     return SessionOut(user=UserOut.of(user), csrf_token=session.csrf_token)
 
 

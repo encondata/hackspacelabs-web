@@ -264,6 +264,6 @@ async def github_callback(
         audit.record(db, "auth.login", actor=user, target=user, summary=f"Signed in with GitHub @{login}", request=request)
         await db.commit()
         response = RedirectResponse(safe_next(cookie.get("n")), status_code=302)
-        set_session_cookie(response, raw)
+        set_session_cookie(response, raw, request)
     response.delete_cookie(STATE_COOKIE, path="/auth/github")
     return response
