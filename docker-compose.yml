@@ -43,5 +43,5 @@ services:
     # this machine, publish the port on loopback only, "127.0.0.1:${SLIPWAY_PORT:-8000}:8000", so clients
     # cannot bypass it.
     ports:
-      - "${SLIPWAY_PORT:-8000}:8000"
+      - "0.0.0.0:${SLIPWAY_PORT:-8000}:8000"
 

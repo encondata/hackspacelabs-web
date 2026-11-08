@@ -32,10 +32,17 @@ ask() { # ask "Question" "suggestion" -> answer on stdout
   printf '%s' "${answer:-$2}"
 }
 
-command -v git >/dev/null 2>&1 || die "git is not installed."
+UNRAID=no; [ -d /mnt/user ] && [ -f /etc/unraid-version ] && UNRAID=yes
+if ! command -v git >/dev/null 2>&1; then
+  [ "$UNRAID" = yes ] && die "git is not installed. On Unraid, add it with the NerdTools or un-get plugin (Apps tab), then run this again."
+  die "git is not installed."
+fi
 command -v curl >/dev/null 2>&1 || die "curl is not installed."
 command -v docker >/dev/null 2>&1 || die "docker is not installed. See https://docs.docker.com/get-docker/"
-docker compose version >/dev/null 2>&1 || die "This needs Docker Compose v2 (the 'docker compose' subcommand)."
+if ! docker compose version >/dev/null 2>&1; then
+  [ "$UNRAID" = yes ] && die "This needs Docker Compose v2. On Unraid, install the Docker Compose Manager plugin (Apps tab), then run this again."
+  die "This needs Docker Compose v2 (the 'docker compose' subcommand)."
+fi
 docker info >/dev/null 2>&1 || die "Docker is installed but not running. Start it and try again."
 
 # Where it goes. Suggested: where it runs now, so an update is just Enter; otherwise the
@@ -93,15 +100,12 @@ fernet_key() {
   if command -v openssl >/dev/null 2>&1; then openssl rand -base64 32
   else head -c 32 /dev/urandom | base64; fi | tr -d '\n' | tr '+/' '-_'
 }
-host_address() {
-  { hostname -I 2>/dev/null || true; } | awk '{print $1}' | grep . || hostname
-}
 
 if [ ! -f .env ]; then
   PORT="${SLIPWAY_PORT:-8000}"
   URL="${SLIPWAY_BASE_URL:-}"
-  [ -n "$URL" ] || URL="$(ask "Public address people will use (your reverse proxy's https:// URL, or this one)?" \
-    "http://$(host_address):$PORT")"
+  [ -n "$URL" ] || URL="$(ask "Public address people will use (your reverse proxy's https:// URL)?" \
+    "http://localhost:$PORT")"
   URL="${URL%/}"
   case "$URL" in http://*|https://*) ;; *) die "The address must start with http:// or https://." ;; esac
 
@@ -185,7 +189,7 @@ GITHUB="not set up yet (see the GitHub lines in $DIR/.env)"
 say "Slipway is up."
 cat <<SUMMARY
 
-  Direct            $BASE  (plain HTTP, for your reverse proxy)
+  Listening on      0.0.0.0:$PORT  (plain HTTP on every interface, for your reverse proxy)
   Public address    $URL
 
   Installed in      $DIR
