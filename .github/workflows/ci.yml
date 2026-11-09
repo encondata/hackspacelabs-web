@@ -36,5 +36,7 @@ jobs:
           TOKEN_ENCRYPTION_KEY: ci-placeholder
       - name: Build web image
         run: docker build -f deployment/Dockerfile -t hackspacelabs-web:ci .
+      - name: Verify web image without DNS, certificates, or external network
+        run: bash deployment/tests/docker-startup.sh
       - name: Build Keycloak image
         run: docker build -f deployment/keycloak/Dockerfile -t hackspacelabs-auth:ci deployment

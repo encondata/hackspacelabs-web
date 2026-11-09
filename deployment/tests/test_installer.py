@@ -23,6 +23,13 @@ class InstallerTests(unittest.TestCase):
 if [[ "${TEST_FAIL:-}" == 1 && "$*" == *'up -d'* ]]; then exit 1; fi
 ''')
         self.stub('git', '''printf 'git %s\\n' "$*" >> "$TEST_LOG"
+if [[ "$1" == -c ]]; then
+  [[ "$2" == "safe.directory=$4" ]] || exit 90
+  shift 2
+elif [[ "${TEST_UNSAFE:-}" == 1 && "$1" == -C ]]; then
+  echo "fatal: detected dubious ownership" >&2
+  exit 128
+fi
 if [[ "$1" == clone ]]; then
   target="${@: -1}"
   mkdir -p "$target/.git" "$target/deployment/scripts"
@@ -62,6 +69,14 @@ fi
         self.assertEqual(envfile.read_text(),contents)
         self.assertIn('pull --ff-only origin main',self.log.read_text())
         self.assertFalse(Path(str(self.destination)+'.install-lock').exists())
+
+    def test_unraid_ownership_uses_only_scoped_trust(self):
+        self.assertEqual(self.run_install().returncode,0)
+        self.env["TEST_UNSAFE"]="1"
+        result=self.run_install('')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn("safe.directory=",self.log.read_text())
+        self.assertNotIn("--global",self.log.read_text())
 
     def test_refuses_nonempty_directory(self):
         self.destination.mkdir()

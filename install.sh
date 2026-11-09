@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 REPOSITORY=https://github.com/encondata/hackspacelabs-web.git
 main() {
-  local destination origin
+  local destination origin checkout_root checkout_status checkout_branch
   for command in git docker openssl; do
     command -v "$command" >/dev/null || { echo "Install $command first." >&2; exit 1; }
   done
@@ -18,17 +18,24 @@ main() {
   mkdir -- "$lock" 2>/dev/null || { echo "Install already running, or stale lock: $lock" >&2; exit 1; }
   # Capture the quoted path now: Bash may unwind local variables before EXIT.
   trap "rmdir -- $(printf '%q' "$lock")" EXIT
+  # Unraid shares can be owned by a different UID. Trust only the chosen path,
+  # for this command invocation; never change global Git trust settings.
+  local -a checkout_git=(git -c "safe.directory=$destination" -C "$destination")
   if [[ -d "$destination/.git" ]]; then
-    [[ "$(git -C "$destination" rev-parse --show-toplevel)" == "$destination" ]] || exit 1
-    origin=$(git -C "$destination" remote get-url origin)
+    checkout_root=$("${checkout_git[@]}" rev-parse --show-toplevel)
+    [[ "$checkout_root" == "$destination" ]] || exit 1
+    origin=$("${checkout_git[@]}" remote get-url origin)
     [[ "$origin" == "$REPOSITORY" || "$origin" == 'git@github.com:encondata/hackspacelabs-web.git' ]] || { echo 'Destination is a different repository; refusing to change it.' >&2; exit 1; }
-    [[ -z "$(git -C "$destination" status --porcelain)" ]] || { echo 'Commit or stash local source changes before updating. deployment/.env is preserved.' >&2; exit 1; }
-    [[ "$(git -C "$destination" branch --show-current)" == main ]] || { echo 'Switch this checkout to main before updating.' >&2; exit 1; }
-    git -C "$destination" pull --ff-only origin main
+    checkout_status=$("${checkout_git[@]}" status --porcelain)
+    [[ -z "$checkout_status" ]] || { echo 'Commit or stash local source changes before updating. deployment/.env is preserved.' >&2; exit 1; }
+    checkout_branch=$("${checkout_git[@]}" branch --show-current)
+    [[ "$checkout_branch" == main ]] || { echo 'Switch this checkout to main before updating.' >&2; exit 1; }
+    "${checkout_git[@]}" pull --ff-only origin main
   else
     [[ -z "$(ls -A -- "$destination")" ]] || { echo 'Destination must be empty or an existing HackSpaceLabs checkout.' >&2; exit 1; }
     git clone --branch main --single-branch "$REPOSITORY" "$destination"
   fi
+  echo "Building source commit: $("${checkout_git[@]}" rev-parse --short HEAD)"
   bash "$destination/deployment/scripts/setup.sh" "$destination"
   rmdir -- "$lock"
   trap - EXIT
