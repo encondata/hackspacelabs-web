@@ -148,7 +148,7 @@ Implemented automated tests cover:
 - Real temporary PostgreSQL: database initialization, persisted sessions reused by a second gateway instance, encrypted token storage, logout deletion, and restricted database privileges.
 - Production frontend build and Docker Compose configuration parsing.
 
-The local Docker engine was unavailable. **Keycloak container startup, realm import, themed login/reset/MFA pages, SMTP delivery, public DNS/HTTPS, and the complete Keycloak browser flow still require staging verification on the target server.** No DNS changes or live accounts were created. The realm template includes the explicitly requested temporary website credential `admin` / `123456`; infrastructure secrets are generated privately on installation.
+GitHub CI now verifies both Docker image builds, web startup with networking disabled, real Keycloak realm import, existing-realm URL migration, and a LAN OIDC authorization redirect. **Themed browser login/password-change/reset/MFA flows, SMTP delivery, public DNS/HTTPS, and the complete authenticated browser session still require verification on the target server.** No DNS changes or live accounts were created. The realm template includes the explicitly requested temporary website credential `admin` / `123456`; infrastructure secrets are generated privately on installation.
 
 Run protocol tests from the repository root:
 

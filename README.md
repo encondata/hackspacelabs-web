@@ -38,7 +38,7 @@ To switch to the configured HTTPS hostnames later, rerun the same installer with
 
 ## Status
 
-The authentication protocol and PostgreSQL session tests passed during development, and the production frontend builds. Docker Compose configuration is validated. Full Keycloak container startup, email delivery, and end-to-end production login still require staging verification; the development machine's Docker engine was unavailable. Fresh installations seed the website account **`admin` / `123456`** with a mandatory password change. Complete the profile and email verification before portal access; configure SMTP first. Infrastructure credentials remain randomly generated.
+The authentication protocol and PostgreSQL session tests passed during development, and the production frontend builds. GitHub CI validates both Docker builds, offline web startup, real Keycloak realm import, existing-realm URL migration, and the LAN OIDC authorization redirect. Full browser password-change/MFA flows, email delivery, and public HTTPS login still require deployment verification. Fresh installations seed the website account **`admin` / `123456`** with a mandatory password change. Complete the profile and email verification before portal access; configure SMTP first. Infrastructure credentials remain randomly generated.
 
 ## Development checks
 
