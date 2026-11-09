@@ -46,13 +46,13 @@ fi
 chmod 600 .env
 # Never source .env as executable shell code or print rendered secret configuration.
 docker compose config --quiet
-echo 'Building images. Your HTTPS reverse proxy must route both hostnames before the web service can become healthy.'
+echo 'Building images and starting local listeners. DNS, certificates, and proxy routes are not checked.'
 if ! docker compose up -d --build --wait --wait-timeout 180; then
   echo 'Startup did not become healthy. Containers/data are retained; this is not a successful installation.' >&2
-  echo 'Check docker compose ps and logs locally. Confirm DNS, HTTPS certificates, and both proxy routes; then rerun install.sh.' >&2
+  echo 'Check docker compose ps and logs for local container, port, or database errors; then rerun install.sh.' >&2
   exit 1
 fi
 docker compose ps
-echo "Services are running. Configure SMTP in Keycloak, then sign in to the website as admin / 123456 and change the temporary password."
+echo "Local services are running. Configure your proxy, DNS, certificates, and SMTP whenever ready."
 echo "Bootstrap credentials are stored privately in $root/deployment/.env; they are not displayed."
 echo 'See deployment/README.md for proxy headers, account setup, backups, and staging checks.'

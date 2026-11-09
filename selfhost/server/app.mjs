@@ -12,13 +12,14 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,log
  const app=express();const cipher=tokenCipher(config.encryptionKey);const refreshes=new Map();
  const cookieName=config.production?'__Host-hsl.sid':'hsl.test.sid';
  app.disable('x-powered-by');app.set('trust proxy',config.production?1:false);
- app.use(helmet({contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],styleSrc:["'self'","'unsafe-inline'"],imgSrc:["'self'",'data:'],connectSrc:["'self'"],objectSrc:["'none'"],baseUri:["'self'"],frameAncestors:["'none'"],formAction:["'self'"],upgradeInsecureRequests:config.production?[]:null}},strictTransportSecurity:config.production?{maxAge:31536000}:false,referrerPolicy:{policy:'no-referrer'}}));
+ app.use(helmet({contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],styleSrc:["'self'","'unsafe-inline'"],imgSrc:["'self'",'data:'],connectSrc:["'self'"],objectSrc:["'none'"],baseUri:["'self'"],frameAncestors:["'none'"],formAction:["'self'"],upgradeInsecureRequests:null}},strictTransportSecurity:config.production?{maxAge:31536000}:false,referrerPolicy:{policy:'no-referrer'}}));
  app.use((req,res,next)=>{
   // Reject ambiguous paths before authorization or static-file routing.
   const raw=req.originalUrl.split('?')[0];let decoded;try{decoded=decodeURIComponent(raw)}catch{return res.sendStatus(400)}
   if(decoded!==raw||raw.includes('\\')||raw.includes('//')||raw.includes('/.')||/[\x00-\x20\x7f]/.test(raw))return res.sendStatus(400);
   if(req.path==='/healthz')return next();
-  if(config.production&&(!req.secure||req.get('host')!==new URL(config.origin).host))return res.status(400).send('Invalid request origin');
+  const protectedRequest=req.path.startsWith('/api/auth/')||req.path==='/admin'||req.path==='/portal';
+  if(config.production&&protectedRequest&&(!req.secure||req.get('host')!==new URL(config.origin).host))return res.status(400).send('Invalid request origin');
   if(req.path.startsWith('/api/')||req.path==='/portal'||req.path==='/admin'||req.path==='/login')res.set('Cache-Control','no-store');
   next();
  });
@@ -66,7 +67,7 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,log
  app.post('/api/auth/logout',async(req,res)=>{
   if(req.get('origin')!==config.origin||!equalSecret(req.get('x-csrf-token')||req.body?.csrf,req.session.csrf))return res.status(403).json({error:'Invalid logout request'});
   let idToken;try{idToken=cipher.open(req.session.tokens).idToken}catch{}
-  await destroy(req.session);clearCookie(res);res.json({redirect:oidc.logout(idToken)});
+  await destroy(req.session);clearCookie(res);res.json({redirect:await oidc.logout(idToken)});
  });
  app.get('/api/auth/account',async(req,res)=>{const user=await userFor(req,res);if(!user)return res.redirect(303,'/login');res.redirect(303,oidc.account)});
  app.use('/api',(_req,res)=>res.status(404).json({error:'No live environment or ticket API is configured. These features use sample data.'}));

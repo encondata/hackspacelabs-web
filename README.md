@@ -18,7 +18,7 @@ Inspect the script before running it. It prompts for the install directory (defa
 | Website | `0.0.0.0:8088` | `hackspacelabs.com` |
 | Keycloak | `0.0.0.0:8089` | `auth.hackspacelabs.com` |
 
-Route each hostname at `/` to its upstream port. The web service needs to reach the public auth URL before it can become healthy. Keep backend ports reachable only by your trusted proxy/LAN. All user traffic uses HTTPS through your proxy. No GitHub credentials are required for installation.
+Route each hostname at `/` to its upstream port. Setup and local listener health do not require DNS, certificates, or proxy routes. The homepage is accessible over the HTTP web port immediately; authentication discovers its public issuer only when login is requested and retries after discovery failures. Keep backend ports reachable only by your trusted proxy/LAN. All user traffic uses HTTPS through your proxy. No GitHub credentials are required for installation.
 
 Existing installations are not reset by updates: realm import only seeds an empty realm.
 

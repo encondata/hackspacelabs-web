@@ -44,7 +44,7 @@ The install directory holds source and private configuration. PostgreSQL data li
 | `hackspacelabs.com` (or the website hostname you enter) | `http://SERVER_IP:8088` |
 | `auth.hackspacelabs.com` | `http://SERVER_IP:8089` |
 
-These are separate hostnames at `/`, not `/web` and `/auth` subdirectories. Configure certificates and DNS at your existing proxy. The application container must also resolve and reach the public HTTPS auth hostname for OIDC discovery and token exchange; use split DNS or working hairpin routing if necessary. Do not disable TLS verification.
+These are separate hostnames at `/`, not `/web` and `/auth` subdirectories. Configure certificates and DNS at your existing proxy. When you later enable login, the application container must resolve and reach the public HTTPS auth hostname for OIDC discovery and token exchange; use split DNS or working hairpin routing if necessary. This is not an installation or startup prerequisite. Do not disable TLS verification.
 
 For each route, **overwrite** inbound `X-Forwarded-For`, `X-Forwarded-Proto: https`, `X-Forwarded-Host`, and `X-Forwarded-Port: 443`; preserve/set `Host` to the correct public hostname. The web gateway trusts one proxy hop. Restrict access to the published backend ports to your trusted proxy/LAN; those HTTP listeners trust proxy headers and must not be exposed directly to the Internet. PostgreSQL and Keycloak management port 9000 are not published. Block public `/healthz` on the web route.
 
@@ -54,7 +54,7 @@ See `reverse-proxy.nginx.conf` for an example to adapt to your existing proxy. T
 
 First startup generates `deployment/.env` with mode 0600. The installer leaves SMTP unset; configure and test email in Keycloak's Admin Console after startup. Later `.env` edits do not update an already imported realm. The installer does not print credentials. Use the bootstrap account stored in that private file to provision permanent administrators and customers as described below.
 
-If both proxy routes are not ready, the web service cannot reach the issuer and the installer reports an unhealthy startup after its wait period. Containers and data stay in place. Fix proxy/DNS/TLS and rerun the installer; it preserves configuration and retries. Container health does not verify SMTP or a full browser login.
+Installation checks local containers only. The web process binds `0.0.0.0:3000` immediately, published as `0.0.0.0:8088` by default, and `/healthz` checks the HTTP listener without contacting DNS, TLS, the identity provider, or the database. The public homepage can be opened directly over HTTP at the server IP and web port. Keycloak listens on its published auth port independently of the public proxy. Authentication initializes on demand when first requested; failed discovery is retried on a later request, so configuring the proxy afterward needs no web restart. Login and authenticated pages still use the configured HTTPS origin and secure cookies. The installer does not run the optional `scripts/verify.mjs` external checks.
 
 For manual operation:
 
@@ -102,7 +102,7 @@ Public account registration is disabled. Account provisioning is administrator-c
 | `GET /api/auth/session` | 401 when anonymous; otherwise returns the user profile, roles, logout CSRF token, and `sampleData: true`. Never returns OAuth tokens. |
 | `POST /api/auth/logout` | Requires exact Origin and `x-csrf-token`; deletes local session and returns the identity-provider logout URL. |
 | `GET /api/auth/account` | Requires a session, then redirects to Keycloak account management. |
-| `GET /healthz` | Container-local health check including PostgreSQL; blocked at the public proxy. |
+| `GET /healthz` | Container-local HTTP liveness check only; blocked at the public proxy. |
 
 No production ticket/device API exists. `/api/*` paths outside authentication return 404. Do not build real customer integrations on top of the sample browser storage.
 
