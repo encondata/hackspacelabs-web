@@ -125,8 +125,9 @@
       "credentials": [
         {
           "type": "password",
-          "value": "123456",
-          "temporary": true
+          "temporary": true,
+          "credentialData": "{\"hashIterations\":210000,\"algorithm\":\"pbkdf2-sha512\",\"additionalParameters\":{}}",
+          "secretData": "{\"value\":\"VQt4OKhEpbM7s1CDUeFIZRWE/GfdbHxecfI5yXX82z7H8RLVGBOJlTYordVuQWFR9i9QZoxi2TDTJEuDcnF66g==\",\"salt\":\"Ox35CsV0fWTX77PMl03GLg==\",\"additionalParameters\":{}}"
         }
       ],
       "requiredActions": [
