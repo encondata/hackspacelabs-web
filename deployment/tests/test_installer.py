@@ -46,8 +46,8 @@ fi
         p.write_text('#!/usr/bin/env bash\nset -eu\n'+body)
         p.chmod(0o755)
 
-    def run_install(self, options='\n\n\n\n'):
-        return subprocess.run(['bash',str(ROOT/'install.sh')],
+    def run_install(self, options='\n\n\n\n', args=()):
+        return subprocess.run(['bash',str(ROOT/'install.sh'),*args],
             input=str(self.destination)+'\n'+options, text=True, env=self.env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -77,6 +77,25 @@ fi
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn("safe.directory=",self.log.read_text())
         self.assertNotIn("--global",self.log.read_text())
+
+    def test_lan_mode_updates_endpoints_and_migrates_existing_realm(self):
+        self.assertEqual(self.run_install().returncode,0)
+        envfile=self.destination/'deployment/.env'
+        secret=[x for x in envfile.read_text().splitlines() if x.startswith('SESSION_SECRET=')][0]
+        result=self.run_install('',('--lan-ip','10.10.48.14'))
+        self.assertEqual(result.returncode,0,result.stderr)
+        contents=envfile.read_text()
+        self.assertIn('APP_ORIGIN=http://10.10.48.14:8088',contents)
+        self.assertIn('AUTH_ORIGIN=http://10.10.48.14:8089',contents)
+        self.assertIn(secret,contents)
+        self.assertIn('run --rm --no-deps -T configure-auth',self.log.read_text())
+        self.assertEqual(self.run_install('',('--https',)).returncode,0)
+        self.assertIn('APP_ORIGIN=https://hackspacelabs.com',envfile.read_text())
+
+    def test_lan_mode_rejects_public_ip(self):
+        result=self.run_install(args=('--lan-ip','8.8.8.8'))
+        self.assertNotEqual(result.returncode,0)
+        self.assertNotIn('AUTH_MODE=lan',(self.destination/'deployment/.env').read_text())
 
     def test_refuses_nonempty_directory(self):
         self.destination.mkdir()

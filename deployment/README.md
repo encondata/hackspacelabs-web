@@ -50,11 +50,19 @@ For each route, **overwrite** inbound `X-Forwarded-For`, `X-Forwarded-Proto: htt
 
 See `reverse-proxy.nginx.conf` for an example to adapt to your existing proxy. The old `Caddyfile` is a reference only and is not started by Compose.
 
+### LAN authentication before DNS and certificates
+
+Run the downloaded installer with `--lan-ip YOUR_PRIVATE_IP`. It accepts only RFC1918 private IPv4 addresses, writes `AUTH_MODE=lan`, `APP_ORIGIN=http://IP:WEB_PORT`, and `AUTH_ORIGIN=http://IP:AUTH_PORT` to `.env`, restarts the services, and updates the existing Keycloak client's exact callback/logout URLs through a one-shot administrator API migration. It never deletes realms, resets passwords, or assigns roles. The temporary infrastructure credentials must still be valid (or be replaced privately with valid infrastructure administrator credentials).
+
+LAN mode permits HTTP for the configured private-IP issuer, uses host-only HttpOnly/SameSite=Lax cookies without `Secure`, and continues to validate JWT signatures, issuer, audience, state, nonce, PKCE, and the exact request Host/Origin. It does not disable TLS certificate verification for HTTPS. Use it only on a trusted LAN because credentials traverse HTTP. Keycloak retains its `external` SSL policy, which allows private-IP HTTP. The master realm’s SSL policy is not changed.
+
+Use `--https` to restore the configured APP_HOST/AUTH_HOST URLs and Secure cookies. Existing sessions must sign in again after switching modes. Ordinary updates without a mode flag preserve the selected mode. Configure SMTP and complete the seeded administrator’s required actions as before.
+
 ### Startup and updates
 
 First startup generates `deployment/.env` with mode 0600. The installer leaves SMTP unset; configure and test email in Keycloak's Admin Console after startup. Later `.env` edits do not update an already imported realm. The installer does not print credentials. Use the bootstrap account stored in that private file to provision permanent administrators and customers as described below.
 
-Installation checks local containers only. The web process binds `0.0.0.0:3000` immediately, published as `0.0.0.0:8088` by default, and `/healthz` checks the HTTP listener without contacting DNS, TLS, the identity provider, or the database. The public homepage can be opened directly over HTTP at the server IP and web port. Keycloak listens on its published auth port independently of the public proxy. Authentication initializes on demand when first requested; failed discovery is retried on a later request, so configuring the proxy afterward needs no web restart. Login and authenticated pages still use the configured HTTPS origin and secure cookies. The installer does not run the optional `scripts/verify.mjs` external checks.
+Installation checks local containers only. The web process binds `0.0.0.0:3000` immediately, published as `0.0.0.0:8088` by default, and `/healthz` checks the HTTP listener without contacting DNS, TLS, the identity provider, or the database. The public homepage can be opened directly over HTTP at the server IP and web port. Keycloak listens on its published auth port independently of the public proxy. Authentication initializes on demand when first requested; failed discovery is retried on a later request, so configuring the proxy afterward needs no web restart. Login and authenticated pages use the explicitly selected HTTPS or LAN origin and its cookie policy. The installer does not run the optional `scripts/verify.mjs` external checks.
 
 For manual operation:
 

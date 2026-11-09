@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 umask 077
 root=${1:?Expected checkout directory}
+access_mode=${2:-keep}
+lan_ip=${3:-}
 cd -- "$root/deployment"
 ask_host() {
   local value
@@ -43,14 +45,43 @@ if [[ ! -f .env ]]; then
 else
   echo 'Keeping existing deployment/.env and persistent volumes.'
 fi
+# Change only endpoint settings; keep credentials and database volumes intact.
+set_setting() {
+  local temporary
+  temporary=$(mktemp .env.new.XXXXXX)
+  awk -v key="$1" -v value="$2" 'BEGIN{done=0} index($0,key "=")==1 {if(!done)print key "=" value;done=1;next} {print} END{if(!done)print key "=" value}' .env > "$temporary"
+  chmod 600 "$temporary"
+  mv -- "$temporary" .env
+}
+get_setting() { awk -F= -v key="$1" '$1==key {value=substr($0,length(key)+2)} END{print value}' .env; }
+if [[ "$access_mode" == lan ]]; then
+  if [[ ! "$lan_ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then echo 'LAN mode requires a private IPv4 address.' >&2; exit 1; fi
+  a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]})); c=$((10#${BASH_REMATCH[3]})); d=$((10#${BASH_REMATCH[4]}))
+  if ! ((a<=255 && b<=255 && c<=255 && d<=255 && (a==10 || (a==192 && b==168) || (a==172 && b>=16 && b<=31)))); then echo 'LAN mode only accepts RFC1918 private IPv4 addresses.' >&2; exit 1; fi
+  lan_ip="$a.$b.$c.$d"
+  web_port=$(get_setting WEB_PORT); web_port=${web_port:-8088}
+  auth_port=$(get_setting AUTH_PORT); auth_port=${auth_port:-8089}
+  set_setting AUTH_MODE lan
+  set_setting APP_ORIGIN "http://$lan_ip:$web_port"
+  set_setting AUTH_ORIGIN "http://$lan_ip:$auth_port"
+  echo "LAN HTTP login enabled for $lan_ip. Use only on your trusted private network."
+elif [[ "$access_mode" == https ]]; then
+  app_host=$(get_setting APP_HOST); auth_host=$(get_setting AUTH_HOST)
+  set_setting AUTH_MODE https
+  set_setting APP_ORIGIN "https://${app_host:-hackspacelabs.com}"
+  set_setting AUTH_ORIGIN "https://${auth_host:-auth.hackspacelabs.com}"
+fi
 chmod 600 .env
 # Never source .env as executable shell code or print rendered secret configuration.
 docker compose config --quiet
 echo 'Building images and starting local listeners. DNS, certificates, and proxy routes are not checked.'
-if ! docker compose up -d --build --wait --wait-timeout 180; then
+if ! BUILDX_GIT_INFO=false docker compose up -d --build --wait --wait-timeout 180; then
   echo 'Startup did not become healthy. Containers/data are retained; this is not a successful installation.' >&2
   echo 'Check docker compose ps and logs for local container, port, or database errors; then rerun install.sh.' >&2
   exit 1
+fi
+if [[ "$access_mode" != keep ]]; then
+  docker compose --profile tools run --rm --no-deps -T configure-auth
 fi
 docker compose ps
 echo "Local services are running. Configure your proxy, DNS, certificates, and SMTP whenever ready."

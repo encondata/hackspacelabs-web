@@ -1,0 +1,34 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomBytes} from 'node:crypto';
+import session from 'express-session';
+import request from 'supertest';
+import {readConfig} from '../server/security.mjs';
+import {createApp} from '../server/app.mjs';
+const environment=()=>({NODE_ENV:'production',AUTH_MODE:'lan',APP_ORIGIN:'http://10.10.48.14:8088',OIDC_ISSUER:'http://10.10.48.14:8089/realms/hackspacelabs',SESSION_SECRET:randomBytes(48).toString('hex'),OIDC_CLIENT_SECRET:randomBytes(32).toString('hex'),TOKEN_ENCRYPTION_KEY:randomBytes(32).toString('base64'),DATABASE_URL:'postgres://example'});
+test('HTTP authentication requires explicit LAN mode and private IPv4 origins',()=>{
+ const env=environment();
+ const config=readConfig(env);
+ assert.equal(config.secureCookies,false);
+ assert.equal(config.allowInsecureOidc,true);
+ assert.throws(()=>readConfig({...env,AUTH_MODE:'https'}),/HTTPS/);
+ assert.throws(()=>readConfig({...env,APP_ORIGIN:'http://8.8.8.8:8088'}));
+ assert.throws(()=>readConfig({...env,OIDC_ISSUER:'http://10.0.0.2:8089/realms/hackspacelabs'}));
+ const secure=readConfig({...env,AUTH_MODE:'https',APP_ORIGIN:'https://hackspacelabs.com',OIDC_ISSUER:'https://auth.hackspacelabs.com/realms/hackspacelabs'});
+ assert.equal(secure.secureCookies,true);
+ assert.equal(secure.allowInsecureOidc,false);
+});
+test('LAN sign-in starts with a non-Secure HttpOnly cookie on the exact configured host',async()=>{
+ const config=readConfig(environment());
+ const app=createApp({config,store:new session.MemoryStore(),publicDir:'/unused',oidc:{begin:async()=>({url:'http://10.10.48.14:8089/authorize',state:'test',nonce:'test',verifier:'test'})}});
+ const response=await request(app).get('/api/auth/login').set('Host','10.10.48.14:8088').expect(303);
+ assert.equal(response.headers.location,'http://10.10.48.14:8089/authorize');
+ const cookie=response.headers['set-cookie'].join(';');
+ assert.match(cookie,/hsl.lan.sid=/);
+ assert.match(cookie,/HttpOnly/);
+ assert.doesNotMatch(cookie,/; Secure/);
+ assert.equal(response.headers['cross-origin-opener-policy'],undefined);
+ assert.equal(response.headers['origin-agent-cluster'],undefined);
+ await request(app).get('/api/auth/login').set('Host','wrong.example').expect(400);
+ await request(app).get('/favicon.ico').expect(302);
+});

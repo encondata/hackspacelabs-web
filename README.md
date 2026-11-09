@@ -24,6 +24,18 @@ Existing installations are not reset by updates: realm import only seeds an empt
 
 **[Full deployment guide](deployment/README.md)** covers proxy headers, bootstrap accounts, SMTP, customer/admin roles, future OAuth clients, backups, and upgrades. See [Nginx example](deployment/reverse-proxy.nginx.conf).
 
+## Direct LAN login before proxy setup
+
+Use the installer’s explicit LAN mode with your server’s private IPv4 address:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/encondata/hackspacelabs-web/main/install.sh -o /tmp/hackspacelabs-install.sh && bash /tmp/hackspacelabs-install.sh --lan-ip YOUR_PRIVATE_IP
+```
+
+This configures the website and Keycloak for HTTP on their existing ports and updates callback URLs in the existing realm. Database contents, account passwords, and roles are preserved. This uses HTTP cookies and transmits login credentials over your trusted LAN; use HTTPS for public access. The infrastructure bootstrap credentials in `.env` must still belong to a valid administrator for the URL migration.
+
+To switch to the configured HTTPS hostnames later, rerun the same installer with `--https` instead of `--lan-ip YOUR_PRIVATE_IP`. No certificates or DNS checks are added to installation. SMTP/email verification requirements are unchanged.
+
 ## Status
 
 The authentication protocol and PostgreSQL session tests passed during development, and the production frontend builds. Docker Compose configuration is validated. Full Keycloak container startup, email delivery, and end-to-end production login still require staging verification; the development machine's Docker engine was unavailable. Fresh installations seed the website account **`admin` / `123456`** with a mandatory password change. Complete the profile and email verification before portal access; configure SMTP first. Infrastructure credentials remain randomly generated.

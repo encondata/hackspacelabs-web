@@ -27,13 +27,13 @@ services:
       KC_DB_URL: jdbc:postgresql://postgres:5432/hsl_identity
       KC_DB_USERNAME: hsl_identity
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Required}
-      KC_HOSTNAME: https://${AUTH_HOST:-auth.hackspacelabs.com}
+      KC_HOSTNAME: ${AUTH_ORIGIN:-https://${AUTH_HOST:-auth.hackspacelabs.com}}
       KC_HOSTNAME_STRICT: 'true'
       KC_HTTP_ENABLED: 'true'
       KC_PROXY_HEADERS: xforwarded
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN:-bootstrap-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_PASSWORD:?Required for first startup}
-      HSL_APP_ORIGIN: https://${APP_HOST:-hackspacelabs.com}
+      HSL_APP_ORIGIN: ${APP_ORIGIN:-https://${APP_HOST:-hackspacelabs.com}}
       HSL_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?Required}
       HSL_SMTP_HOST: ${SMTP_HOST:-}
       HSL_SMTP_PORT: ${SMTP_PORT:-587}
@@ -54,9 +54,10 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      AUTH_MODE: ${AUTH_MODE:-https}
       PORT: '3000'
-      APP_ORIGIN: https://${APP_HOST:-hackspacelabs.com}
-      OIDC_ISSUER: https://${AUTH_HOST:-auth.hackspacelabs.com}/realms/hackspacelabs
+      APP_ORIGIN: ${APP_ORIGIN:-https://${APP_HOST:-hackspacelabs.com}}
+      OIDC_ISSUER: ${AUTH_ORIGIN:-https://${AUTH_HOST:-auth.hackspacelabs.com}}/realms/hackspacelabs
       OIDC_CLIENT_ID: hackspacelabs-web
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?Required}
       SESSION_SECRET: ${SESSION_SECRET:?Required}
@@ -71,6 +72,18 @@ services:
       timeout: 5s
       retries: 12
       start_period: 120s
+    networks: [backend]
+  configure-auth:
+    profiles: [tools]
+    image: hackspacelabs-web
+    entrypoint: [node, /tools/configure-auth.mjs]
+    volumes:
+      - ./scripts/configure-auth.mjs:/tools/configure-auth.mjs:ro
+    environment:
+      APP_ORIGIN: ${APP_ORIGIN:-https://${APP_HOST:-hackspacelabs.com}}
+      AUTH_ORIGIN: ${AUTH_ORIGIN:-https://${AUTH_HOST:-auth.hackspacelabs.com}}
+      ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN:-bootstrap-admin}
+      ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_PASSWORD:?Required}
     networks: [backend]
 volumes:
   postgres_data:

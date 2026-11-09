@@ -10,26 +10,27 @@ const regenerate=s=>new Promise((resolve,reject)=>s.regenerate(error=>error?reje
 const destroy=s=>new Promise((resolve,reject)=>s.destroy(error=>error?reject(error):resolve()));
 export function createApp({config,store,oidc,publicDir,healthy=async()=>true,log=console}){
  const app=express();const cipher=tokenCipher(config.encryptionKey);const refreshes=new Map();
- const cookieName=config.production?'__Host-hsl.sid':'hsl.test.sid';
+ const secureCookies=config.secureCookies??config.production;
+ const cookieName=secureCookies?'__Host-hsl.sid':(config.production?'hsl.lan.sid':'hsl.test.sid');
  app.disable('x-powered-by');app.set('trust proxy',config.production?1:false);
- app.use(helmet({contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],styleSrc:["'self'","'unsafe-inline'"],imgSrc:["'self'",'data:'],connectSrc:["'self'"],objectSrc:["'none'"],baseUri:["'self'"],frameAncestors:["'none'"],formAction:["'self'"],upgradeInsecureRequests:null}},strictTransportSecurity:config.production?{maxAge:31536000}:false,referrerPolicy:{policy:'no-referrer'}}));
+ app.use(helmet({crossOriginOpenerPolicy:false,originAgentCluster:false,contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],styleSrc:["'self'","'unsafe-inline'"],imgSrc:["'self'",'data:'],connectSrc:["'self'"],objectSrc:["'none'"],baseUri:["'self'"],frameAncestors:["'none'"],formAction:["'self'"],upgradeInsecureRequests:null}},strictTransportSecurity:secureCookies?{maxAge:31536000}:false,referrerPolicy:{policy:'no-referrer'}}));
  app.use((req,res,next)=>{
   // Reject ambiguous paths before authorization or static-file routing.
   const raw=req.originalUrl.split('?')[0];let decoded;try{decoded=decodeURIComponent(raw)}catch{return res.sendStatus(400)}
   if(decoded!==raw||raw.includes('\\')||raw.includes('//')||raw.includes('/.')||/[\x00-\x20\x7f]/.test(raw))return res.sendStatus(400);
   if(req.path==='/healthz')return next();
   const protectedRequest=req.path.startsWith('/api/auth/')||req.path==='/admin'||req.path==='/portal';
-  if(config.production&&protectedRequest&&(!req.secure||req.get('host')!==new URL(config.origin).host))return res.status(400).send('Invalid request origin');
+  if(config.production&&protectedRequest&&((secureCookies&&!req.secure)||req.get('host')!==new URL(config.origin).host))return res.status(400).send('Invalid request origin');
   if(req.path.startsWith('/api/')||req.path==='/portal'||req.path==='/admin'||req.path==='/login')res.set('Cache-Control','no-store');
   next();
  });
  app.get('/healthz',async(_req,res)=>{try{await healthy();res.json({status:'ok'})}catch{res.status(503).json({status:'unavailable'})}});
  app.use('/assets',express.static(path.join(publicDir,'assets'),{immutable:true,maxAge:'1y',fallthrough:false}));
  app.use(express.json({limit:'8kb'}));app.use(express.urlencoded({extended:false,limit:'8kb'}));
- app.use(session({name:cookieName,secret:config.sessionSecret,store,resave:false,saveUninitialized:false,rolling:true,cookie:{httpOnly:true,secure:config.production,sameSite:'lax',path:'/',maxAge:config.idleMs}}));
+ app.use(session({name:cookieName,secret:config.sessionSecret,store,resave:false,saveUninitialized:false,rolling:true,cookie:{httpOnly:true,secure:secureCookies,sameSite:'lax',path:'/',maxAge:config.idleMs}}));
  const authLimit=rateLimit({windowMs:15*60*1000,limit:60,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many authentication attempts. Please try again later.'}});
  app.use('/api/auth/login',authLimit);app.use('/api/auth/callback',authLimit);
- function clearCookie(res){res.clearCookie(cookieName,{httpOnly:true,secure:config.production,sameSite:'lax',path:'/'})}
+ function clearCookie(res){res.clearCookie(cookieName,{httpOnly:true,secure:secureCookies,sameSite:'lax',path:'/'})}
  async function expire(req,res){await regenerate(req.session);clearCookie(res)}
  async function userFor(req,res){
   if(!req.session.identity)return null;
@@ -77,6 +78,7 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,log
   res.sendFile(path.join(publicDir,'index.html'));
  });
  app.get(['/','/login','/forbidden'],(_req,res)=>res.sendFile(path.join(publicDir,'index.html')));
+ app.get('/favicon.ico',(_req,res)=>res.redirect(302,'/hackspacelabs-logo.png'));
  app.get('/hackspacelabs-logo.png',(_req,res)=>res.sendFile(path.join(publicDir,'hackspacelabs-logo.png')));
  app.use((_req,res)=>res.status(404).send('Page not found'));
  app.use((error,req,res,_next)=>{log.error('Request failed',{path:req.path,kind:error?.name||'Error'});if(!res.headersSent)res.status(503).json({error:'Service temporarily unavailable. Please try again.'})});

@@ -1,6 +1,6 @@
 import * as oidc from 'openid-client';
 export async function createOidc(settings){
- const config=await oidc.discovery(new URL(settings.issuer),settings.clientId,settings.clientSecret,undefined,{execute:[...(!settings.production?[oidc.allowInsecureRequests]:[]),oidc.enableNonRepudiationChecks],timeout:10});
+ const config=await oidc.discovery(new URL(settings.issuer),settings.clientId,settings.clientSecret,undefined,{execute:[...((!settings.production||settings.allowInsecureOidc)?[oidc.allowInsecureRequests]:[]),oidc.enableNonRepudiationChecks],timeout:10});
  if(config.serverMetadata().issuer!==settings.issuer)throw new Error('OIDC issuer mismatch');
  if(!config.serverMetadata().code_challenge_methods_supported?.includes('S256'))throw new Error('OIDC server must support PKCE S256');
  const callback=settings.origin+'/api/auth/callback';

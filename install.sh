@@ -3,6 +3,13 @@ set -Eeuo pipefail
 REPOSITORY=https://github.com/encondata/hackspacelabs-web.git
 main() {
   local destination origin checkout_root checkout_status checkout_branch
+  local access_mode=keep lan_ip=
+  case "${1:-}" in
+    --lan-ip) access_mode=lan; lan_ip=${2:?Provide your private LAN IPv4 address} ;;
+    --https) access_mode=https ;;
+    '') ;;
+    *) echo 'Usage: install.sh [--lan-ip PRIVATE_IP | --https]' >&2; exit 1 ;;
+  esac
   for command in git docker openssl; do
     command -v "$command" >/dev/null || { echo "Install $command first." >&2; exit 1; }
   done
@@ -36,7 +43,7 @@ main() {
     git clone --branch main --single-branch "$REPOSITORY" "$destination"
   fi
   echo "Building source commit: $("${checkout_git[@]}" rev-parse --short HEAD)"
-  bash "$destination/deployment/scripts/setup.sh" "$destination"
+  bash "$destination/deployment/scripts/setup.sh" "$destination" "$access_mode" "$lan_ip"
   rmdir -- "$lock"
   trap - EXIT
 }
