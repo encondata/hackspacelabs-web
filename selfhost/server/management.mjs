@@ -26,31 +26,35 @@ const protectedClients=new Set(['hackspacelabs-web','hackspacelabs-management','
 export const settingFields=['displayName','passwordPolicy','registrationAllowed','rememberMe','bruteForceProtected','accessTokenLifespan','ssoSessionIdleTimeout','ssoSessionMaxLifespan'];
 export function managementRouter({api,userFor,config,log=console}){
  const router=express.Router();
+ let portalClientId;
+ async function portalClient(){if(!portalClientId){const clients=await api('/clients?clientId=hackspacelabs-web');if(clients.length!==1)throw new Error('Portal client unavailable');portalClientId=segment(clients[0].id)}return portalClientId}
+ async function rolePath(){return '/role-mappings/clients/'+await portalClient()}
+
  router.use(async(req,res,next)=>{
   const user=await userFor(req,res);if(!user)return res.status(401).json({error:'Please sign in again.'});
   if(!user.roles.includes('admin'))return res.status(403).json({error:'Administrator access required.'});
   if(!['GET','HEAD'].includes(req.method)&&(req.get('origin')!==config.origin||!equalSecret(req.get('x-csrf-token'),req.session.csrf)))return res.status(403).json({error:'Invalid request. Reload and try again.'});
   // Check live effective roles, including groups, so a demoted admin cannot keep managing users.
   const record=await api('/users/'+segment(user.id));
-  const roles=await api('/users/'+segment(user.id)+'/role-mappings/realm/composite');
+  const roles=await api('/users/'+segment(user.id)+await rolePath()+'/composite');
   if(!record.enabled||!roles.some(r=>r.name==='admin'))return res.status(403).json({error:'Administrator access has been removed.'});
   req.actor=user;next();
  });
  async function page(route,query){const first=Math.max(0,Number(query.first)||0);return api(route+(route.includes('?')?'&':'?')+'first='+first+'&max=50')}
  function removeOwnAdminRisk(req,wanted){return !wanted.some(r=>r.name==='admin')}
- async function roleObjects(list){return Promise.all(names(list).map(name=>api('/roles/'+segment(name))))}
+ async function roleObjects(list){return Promise.all(names(list).map(name=>portalClient().then(id=>api('/clients/'+id+'/roles/'+segment(name)))))}
  async function editableClient(id){const client=await api('/clients/'+segment(id));if(protectedClients.has(client.clientId))fail('This internal client is managed by the installer.');return client}
  router.use('/users/:id',async(req,res,next)=>{if(req.method!=='GET'){const target=await api('/users/'+segment(req.params.id));if(target.serviceAccountClientId)return res.status(400).json({error:'Service accounts are managed through their connected app.'})}next()});
  const audit=(req,action)=>log.info?.('Identity administration',{actor:req.actor.id,action,target:req.params.id||req.params.name||'realm'});
  router.get('/users',async(req,res)=>{const search=typeof req.query.search==='string'?req.query.search.slice(0,200):'';res.json((await page('/users?search='+encodeURIComponent(search),req.query)).filter(u=>!u.serviceAccountClientId).map(userView))});
  router.post('/users',async(req,res)=>{const username=text(req.body.username,'username',true);const password=req.body.password;if(typeof password!=='string'||!password||password.length>4096)fail('Enter a password.');await api('/users','POST',{username,enabled:true,credentials:[{type:'password',value:password,temporary:true}],requiredActions:['UPDATE_PASSWORD']});audit(req,'create user');res.status(201).json({ok:true})});
- router.get('/users/:id',async(req,res)=>{const p='/users/'+segment(req.params.id);const [user,groups,roles,sessions]=await Promise.all([api(p),api(p+'/groups?max=100'),api(p+'/role-mappings/realm'),api(p+'/sessions')]);res.json({...userView(user),groups,roles,sessions})});
+ router.get('/users/:id',async(req,res)=>{const p='/users/'+segment(req.params.id);const [user,groups,roles,sessions]=await Promise.all([api(p),api(p+'/groups?max=100'),api(p+await rolePath()),api(p+'/sessions')]);res.json({...userView(user),groups,roles,sessions})});
  router.put('/users/:id',async(req,res)=>{const data={firstName:text(req.body.firstName,'first name'),lastName:text(req.body.lastName,'last name'),email:text(req.body.email,'email'),enabled:bool(req.body.enabled)};if(req.params.id===req.actor.id&&!data.enabled)fail('You cannot disable your own account.');await api('/users/'+segment(req.params.id),'PUT',data);if(!data.enabled)await api('/users/'+segment(req.params.id)+'/logout','POST');audit(req,'update user');res.json({ok:true})});
  router.post('/users/:id/password',async(req,res)=>{const password=req.body.password;if(typeof password!=='string'||!password||password.length>4096)fail('Enter a password.');await api('/users/'+segment(req.params.id)+'/reset-password','PUT',{type:'password',value:password,temporary:true});await api('/users/'+segment(req.params.id)+'/logout','POST');audit(req,'reset password');res.json({ok:true})});
  router.post('/users/:id/logout',async(req,res)=>{await api('/users/'+segment(req.params.id)+'/logout','POST');audit(req,'revoke user sessions');res.json({ok:true})});
  for(const kind of ['users','groups']){
   router.put('/'+kind+'/:id/roles',async(req,res)=>{
-   const path='/'+kind+'/'+segment(req.params.id)+'/role-mappings/realm';const wanted=await roleObjects(req.body.roles);const current=await api(path);
+   const path='/'+kind+'/'+segment(req.params.id)+await rolePath();const wanted=await roleObjects(req.body.roles);const current=await api(path);
    if(kind==='groups'&&removeOwnAdminRisk(req,wanted)){const ownGroups=await api('/users/'+segment(req.actor.id)+'/groups?max=1000');if(ownGroups.some(g=>g.id===req.params.id))fail('Use another administrator to remove admin access from your own group.');}
    if(kind==='users'&&req.params.id===req.actor.id&&!wanted.some(r=>r.name==='admin'))fail('You cannot remove your own direct admin role.');
    const add=wanted.filter(r=>!current.some(c=>c.id===r.id));const remove=current.filter(r=>!wanted.some(c=>c.id===r.id));
@@ -61,10 +65,10 @@ export function managementRouter({api,userFor,config,log=console}){
  router.delete('/users/:id/groups/:group',async(req,res)=>{if(req.params.id===req.actor.id)fail('Use another administrator to change your own group membership.');await api('/users/'+segment(req.params.id)+'/groups/'+segment(req.params.group),'DELETE');audit(req,'leave group');res.json({ok:true})});
  router.get('/groups',async(req,res)=>res.json(await page('/groups?search='+encodeURIComponent(String(req.query.search||'')),req.query)));
  router.post('/groups',async(req,res)=>{await api('/groups','POST',{name:text(req.body.name,'group name',true)});audit(req,'create group');res.status(201).json({ok:true})});
- router.get('/groups/:id',async(req,res)=>{const p='/groups/'+segment(req.params.id);const [group,members,roles]=await Promise.all([api(p),page(p+'/members',req.query),api(p+'/role-mappings/realm')]);res.json({...group,members:members.map(userView),roles})});
+ router.get('/groups/:id',async(req,res)=>{const p='/groups/'+segment(req.params.id);const [group,members,roles]=await Promise.all([api(p),page(p+'/members',req.query),api(p+await rolePath())]);res.json({...group,members:members.map(userView),roles})});
  router.put('/groups/:id',async(req,res)=>{await api('/groups/'+segment(req.params.id),'PUT',{name:text(req.body.name,'group name',true)});audit(req,'rename group');res.json({ok:true})});
- router.get('/roles',async(_req,res)=>res.json(await api('/roles')));
- router.post('/roles',async(req,res)=>{await api('/roles','POST',{name:text(req.body.name,'role name',true),description:text(req.body.description||'','description')});audit(req,'create role');res.status(201).json({ok:true})});
+ router.get('/roles',async(_req,res)=>res.json(await api('/clients/'+await portalClient()+'/roles')));
+ router.post('/roles',async(req,res)=>{await api('/clients/'+await portalClient()+'/roles','POST',{name:text(req.body.name,'role name',true),description:text(req.body.description||'','description')});audit(req,'create role');res.status(201).json({ok:true})});
  router.get('/clients',async(req,res)=>res.json((await page('/clients',req.query)).map(c=>({id:c.id,clientId:c.clientId,name:c.name,enabled:c.enabled,internal:protectedClients.has(c.clientId)}))));
  router.get('/clients/:id',async(req,res)=>{const c=await api('/clients/'+segment(req.params.id));const {secret,registrationAccessToken,...safe}=c;res.json({...safe,internal:protectedClients.has(c.clientId)})});
  function clientData(body){

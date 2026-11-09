@@ -40,9 +40,10 @@ if(process.argv[2]==='verify'){
  await managed('/groups','POST',{name:'Portal integration group'});
  const [group]=await managed('/groups?search=Portal%20integration%20group');
  await managed('/users/'+user.id+'/groups/'+group.id,'PUT');
- const customer=await managed('/roles/customer');
- await managed('/groups/'+group.id+'/role-mappings/realm','POST',[customer]);
- if(!(await managed('/users/'+user.id+'/role-mappings/realm/composite')).some(r=>r.name==='customer'))throw new Error('Group roles did not propagate');
+ const [portalClient]=await managed('/clients?clientId=hackspacelabs-web');
+ const customer=await managed('/clients/'+portalClient.id+'/roles/customer');
+ await managed('/groups/'+group.id+'/role-mappings/clients/'+portalClient.id,'POST',[customer]);
+ if(!(await managed('/users/'+user.id+'/role-mappings/clients/'+portalClient.id+'/composite')).some(r=>r.name==='customer'))throw new Error('Group roles did not propagate');
  await managed('/users/'+user.id+'/reset-password','PUT',{type:'password',value:'replacement-disposable-password',temporary:true});
  await managed('/clients','POST',{clientId:'portal-integration-app',protocol:'openid-connect',publicClient:false,standardFlowEnabled:true,redirectUris:['https://app.example/callback'],attributes:{'pkce.code.challenge.method':'S256'}});
  const [client]=await managed('/clients?clientId=portal-integration-app');

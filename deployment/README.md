@@ -181,8 +181,8 @@ Before enabling real users, verify customer login and admin denial in one browse
 
 Administrators now have **Users**, **Groups**, **Connected apps**, and **Authentication** in the portal sidebar. These operate on live Keycloak records; the environment and support sections remain samples.
 
-- Users: create username accounts, edit optional profile fields, enable/disable access, assign realm roles and groups, set temporary passwords (required change next login, no email), and end sessions.
-- Groups: create/rename groups, view members and assign inherited realm roles. Create additional realm roles from either user or group details.
+- Users: create username accounts, edit optional profile fields, enable/disable access, assign portal roles and groups, set temporary passwords (required change next login, no email), and end sessions.
+- Groups: create/rename groups, view members and assign inherited portal roles. Create additional portal roles from either user or group details.
 - Connected apps: register OIDC apps using Authorization Code + PKCE S256, edit exact callback URLs and web origins, enable/disable apps, and reveal/rotate confidential client secrets. Internal platform clients are read-only to avoid breaking the portal login or management connection.
 - Authentication: view issuer/discovery URLs, configure password policy (blank removes additional requirements), self-registration, remember-me, brute-force protection, and provider token/session lifetimes. The web session also retains its own 30-minute idle and 8-hour absolute limits.
 
