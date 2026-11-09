@@ -20,9 +20,9 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,man
   const raw=req.originalUrl.split('?')[0];let decoded;try{decoded=decodeURIComponent(raw)}catch{return res.sendStatus(400)}
   if(decoded!==raw||raw.includes('\\')||raw.includes('//')||raw.includes('/.')||/[\x00-\x20\x7f]/.test(raw))return res.sendStatus(400);
   if(req.path==='/healthz')return next();
-  const protectedRequest=req.path.startsWith('/api/')||req.path==='/admin'||req.path==='/portal';
+  const protectedRequest=req.path.startsWith('/api/')||req.path==='/admin'||(req.path==='/portal'||req.path==='/me');
   if(config.production&&protectedRequest&&((secureCookies&&!req.secure)||req.get('host')!==new URL(config.origin).host))return res.status(400).send('Invalid request origin');
-  if(req.path.startsWith('/api/')||req.path==='/portal'||req.path==='/admin'||req.path==='/login')res.set('Cache-Control','no-store');
+  if(req.path.startsWith('/api/')||(req.path==='/portal'||req.path==='/me')||req.path==='/admin'||req.path==='/login')res.set('Cache-Control','no-store');
   next();
  });
  app.get('/healthz',async(_req,res)=>{try{await healthy();res.json({status:'ok'})}catch{res.status(503).json({status:'unavailable'})}});
@@ -71,10 +71,10 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,man
   let idToken;try{idToken=cipher.open(req.session.tokens).idToken}catch{}
   await destroy(req.session);clearCookie(res);res.json({redirect:await oidc.logout(idToken)});
  });
- app.get('/api/auth/account',async(req,res)=>{const user=await userFor(req,res);if(!user)return res.redirect(303,'/login');res.redirect(303,oidc.account)});
+ app.get('/api/auth/account',async(req,res)=>{const user=await userFor(req,res);if(!user)return res.redirect(303,'/login');res.redirect(303,'/me')});
  if(management)app.use('/api/admin',managementRouter({api:management,userFor,config,log}));
  app.use('/api',(_req,res)=>res.status(404).json({error:'No live environment or ticket API is configured. These features use sample data.'}));
- app.get(['/admin','/portal'],async(req,res)=>{
+ app.get(['/admin','/portal','/me'],async(req,res)=>{
   const user=await userFor(req,res);if(!user)return res.redirect(303,'/login?returnTo='+encodeURIComponent(req.path));
   if(!canAccess(user,req.path))return res.status(403).sendFile(path.join(publicDir,'index.html'));
   res.sendFile(path.join(publicDir,'index.html'));

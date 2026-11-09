@@ -29,3 +29,15 @@ test('return targets are restricted and cannot redirect off-site',async()=>{asse
 test('encrypted tokens reject tampering and production configuration rejects HTTP',()=>{const box=tokenCipher(config.encryptionKey);const value=box.seal({refreshToken:'secret'});assert.deepEqual(box.open(value),{refreshToken:'secret'});const parts=value.split('.');parts[2]=Buffer.from('tampered').toString('base64url');assert.throws(()=>box.open(parts.join('.')));assert.throws(()=>readConfig({NODE_ENV:'production',APP_ORIGIN:'http://hackspacelabs.com',OIDC_ISSUER:'https://auth.hackspacelabs.com/realms/hackspacelabs'}),/HTTPS/);assert.throws(()=>identityFromClaims({sub:'1',email:'a@example.com',email_verified:true,hsl_roles:['administrator']}),/role/)});
 
 test('username accounts can sign in without verified email',async()=>{const {agent}=fixture();issuer.state.verified=false;issuer.state.roles=['admin'];assert.equal((await login(agent)).headers.location,'/admin');assert.equal((await agent.get('/admin')).status,200);const identity=identityFromClaims({sub:'admin-id',preferred_username:'admin',hsl_roles:['admin']});assert.equal(identity.name,'admin');assert.equal(identity.email,'');assert.throws(()=>identityFromClaims({sub:'admin-id',preferred_username:'admin',hsl_roles:[]}),/role/)});
+
+
+test('personal account page is protected and supports both portal roles',async()=>{
+ for(const role of ['customer','admin']){
+  const {agent}=fixture();issuer.state.roles=[role];
+  const anonymous=await agent.get('/me');assert.equal(anonymous.status,303);assert.equal(anonymous.headers.location,'/login?returnTo=%2Fme');
+  assert.equal((await login(agent,'/me')).headers.location,'/me');
+  const page=await agent.get('/me');assert.equal(page.status,200);assert.equal(page.headers['cache-control'],'no-store');
+  assert.equal((await agent.get('/api/auth/account')).headers.location,'/me');
+ }
+ assert.equal(safeDestination('/me'),'/me');assert.equal(safeDestination('/me?user=other'),null);
+});

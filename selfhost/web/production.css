@@ -1,11 +1,1 @@
 .auth-link{display:block;margin-top:20px;font-size:12px;border:0;background:transparent;color:inherit;cursor:pointer;font-family:inherit;padding:0;text-decoration:underline;text-underline-offset:3px}
-.p-account{position:relative}
-.p-account>summary{cursor:pointer;list-style:none}
-.p-account>summary::-webkit-details-marker{display:none}
-.p-account>summary:hover{background:#f7f8f5}
-.p-account>summary:focus-visible{outline:2px solid var(--navy);outline-offset:2px}
-.p-account-chevron{margin-left:auto;flex-shrink:0;transform:rotate(-90deg)}
-.p-account[open] .p-account-chevron{transform:rotate(90deg)}
-.p-account-actions{position:absolute;bottom:100%;left:0;right:0;padding:6px;background:#fff;border:1px solid var(--p-line);border-radius:6px;box-shadow:0 4px 18px #0e344017;z-index:30}
-.p-account-actions a,.p-account-actions button{display:block;width:100%;padding:12px;text-align:left;border:0;background:transparent;font:inherit;font-size:12px;color:var(--navy);cursor:pointer;border-radius:3px}
-.p-account-actions a:hover,.p-account-actions button:hover{background:#edf2ee}
