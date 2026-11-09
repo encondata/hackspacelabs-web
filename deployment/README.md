@@ -72,12 +72,16 @@ Edit `BIND_ADDRESS`, `WEB_PORT`, and `AUTH_PORT` in `.env` to change published e
 1. Open `https://auth.hackspacelabs.com/admin/` and use the **temporary bootstrap administrator** from the private `.env`. This is a Keycloak infrastructure account in the `master` realm, not a HackSpaceLabs website account.
 2. Create a permanent, individually named Keycloak administrator, configure MFA, verify that it works, and remove the temporary bootstrap account. Remove bootstrap credentials from the running environment after bootstrap is complete. Maintain a documented recovery process.
 3. Select the **hackspacelabs** realm. Confirm Realm settings → Email and test SMTP. Email verification and password-reset links cannot be delivered until SMTP is configured successfully.
-4. Create an individual user in this realm. Assign a role from client **hackspacelabs-web**:
+4. On a **fresh realm**, the website administrator is **`admin` / `123456`** with the `hackspacelabs-web` client role `admin`. Keycloak requires a password change, profile completion (including your email), and email verification before issuing the login tokens used by the website. The replacement password must satisfy the realm policy (at least 14 characters). Configure SMTP first. This website account is separate from the randomly generated infrastructure bootstrap administrator in the `master` realm.
+
+   For additional individual users, assign a role from client **hackspacelabs-web**:
    - `customer`: access `/portal` only.
    - `admin`: access `/admin` and `/portal`.
    No role is granted by email address, URL, browser storage, or being the first person to sign in. Accounts without an assigned application role are denied.
 5. Use required-action emails to verify email and set an initial password. Do not share permanent passwords. For administrators, also require `CONFIGURE_TOTP` (or configure an appropriately enforced passkey/MFA policy) before granting operational access.
 6. Visit the website `/login`, choose **Continue to sign in**, and complete the branded Keycloak flow. The gateway routes customers to `/portal` and admins to `/admin`.
+
+**Existing installations:** startup import skips an existing realm. Updating or reinstalling the code never resets an administrator password. If the realm already exists, use its infrastructure administrator to create `admin`, assign the website `admin` client role, set `123456` as a **temporary** password, and require `UPDATE_PASSWORD`, `UPDATE_PROFILE`, and `VERIFY_EMAIL`. Do not overwrite an existing account or delete database volumes.
 
 Public account registration is disabled. Account provisioning is administrator-controlled. Keycloak handles password reset on its login screen and account management at `/realms/hackspacelabs/account/`.
 
@@ -136,7 +140,7 @@ Implemented automated tests cover:
 - Real temporary PostgreSQL: database initialization, persisted sessions reused by a second gateway instance, encrypted token storage, logout deletion, and restricted database privileges.
 - Production frontend build and Docker Compose configuration parsing.
 
-The local Docker engine was unavailable. **Keycloak container startup, realm import, themed login/reset/MFA pages, SMTP delivery, public DNS/HTTPS, and the complete Keycloak browser flow still require staging verification on the target server.** No production credentials, DNS changes, or live accounts were created.
+The local Docker engine was unavailable. **Keycloak container startup, realm import, themed login/reset/MFA pages, SMTP delivery, public DNS/HTTPS, and the complete Keycloak browser flow still require staging verification on the target server.** No DNS changes or live accounts were created. The realm template includes the explicitly requested temporary website credential `admin` / `123456`; infrastructure secrets are generated privately on installation.
 
 Run protocol tests from the repository root:
 

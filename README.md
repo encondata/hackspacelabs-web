@@ -20,11 +20,13 @@ Inspect the script before running it. It prompts for the install directory (defa
 
 Route each hostname at `/` to its upstream port. The web service needs to reach the public auth URL before it can become healthy. Keep backend ports reachable only by your trusted proxy/LAN. All user traffic uses HTTPS through your proxy. No GitHub credentials are required for installation.
 
+Existing installations are not reset by updates: realm import only seeds an empty realm.
+
 **[Full deployment guide](deployment/README.md)** covers proxy headers, bootstrap accounts, SMTP, customer/admin roles, future OAuth clients, backups, and upgrades. See [Nginx example](deployment/reverse-proxy.nginx.conf).
 
 ## Status
 
-The authentication protocol and PostgreSQL session tests passed during development, and the production frontend builds. Docker Compose configuration is validated. Full Keycloak container startup, email delivery, and end-to-end production login still require staging verification; the development machine's Docker engine was unavailable. No live accounts or credentials are included.
+The authentication protocol and PostgreSQL session tests passed during development, and the production frontend builds. Docker Compose configuration is validated. Full Keycloak container startup, email delivery, and end-to-end production login still require staging verification; the development machine's Docker engine was unavailable. Fresh installations seed the website account **`admin` / `123456`** with a mandatory password change. Complete the profile and email verification before portal access; configure SMTP first. Infrastructure credentials remain randomly generated.
 
 ## Development checks
 

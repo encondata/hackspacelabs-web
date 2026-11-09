@@ -116,5 +116,29 @@
         ]
       }
     ]
-  }
+  },
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": false,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "123456",
+          "temporary": true
+        }
+      ],
+      "requiredActions": [
+        "UPDATE_PASSWORD",
+        "UPDATE_PROFILE",
+        "VERIFY_EMAIL"
+      ],
+      "clientRoles": {
+        "hackspacelabs-web": [
+          "admin"
+        ]
+      }
+    }
+  ]
 }

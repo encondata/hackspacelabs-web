@@ -24,7 +24,7 @@ if [[ ! -f .env ]]; then
   web_port=$(ask_port 'Website HTTP port (0.0.0.0)' 8088)
   auth_port=$(ask_port 'Authentication HTTP port (0.0.0.0)' 8089)
   [[ "$web_port" != "$auth_port" ]] || { echo 'Web and auth require distinct ports.' >&2; exit 1; }
-  # No default credentials and no secrets in process arguments or terminal output.
+  # Infrastructure secrets are random and never printed; the realm imports the requested temporary website admin.
   temporary=$(mktemp .env.new.XXXXXX)
   trap 'rm -f -- "$temporary"' EXIT
   {
@@ -53,6 +53,6 @@ if ! docker compose up -d --build --wait --wait-timeout 180; then
   exit 1
 fi
 docker compose ps
-echo "Services are running. Configure SMTP and provision users in Keycloak before customer use."
+echo "Services are running. Configure SMTP in Keycloak, then sign in to the website as admin / 123456 and change the temporary password."
 echo "Bootstrap credentials are stored privately in $root/deployment/.env; they are not displayed."
 echo 'See deployment/README.md for proxy headers, account setup, backups, and staging checks.'
