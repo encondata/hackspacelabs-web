@@ -63,6 +63,9 @@ const representation={clientId:managementId,protocol:'openid-connect',enabled:tr
 let [management]=await api('/clients?clientId='+managementId);
 if(!management){await api('/clients',{method:'POST',body:JSON.stringify(representation)});[management]=await api('/clients?clientId='+managementId)}
 else await api('/clients/'+management.id,{method:'PUT',body:JSON.stringify(representation)});
+const adminScope=(await api('/client-scopes')).find(scope=>scope.name==='kc-admin-api');
+if(!adminScope)throw new Error('Keycloak admin API scope is missing');
+await api('/clients/'+management.id+'/default-client-scopes/'+adminScope.id,{method:'PUT'});
 const service=await api('/clients/'+management.id+'/service-account-user');
 const [realmManagement]=await api('/clients?clientId=realm-management');
 const role=await api('/clients/'+realmManagement.id+'/roles/realm-admin');
