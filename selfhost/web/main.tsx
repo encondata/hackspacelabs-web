@@ -16,6 +16,6 @@ function App(){const pathname=location.pathname;const [session,setSession]=useSt
  const isAdmin=session.user.roles.includes('admin');
  const logout=async()=>{try{const response=await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin',headers:{'x-csrf-token':session.csrfToken||''}});if(!response.ok)throw new Error();const data=await response.json();location.assign(data.redirect)}catch{setError('Sign-out could not be completed. Please reload and try again.')}};
  if(pathname==='/forbidden'||(pathname==='/admin'&&!isAdmin))return <AccountFrame><h2>Access isn’t available.</h2><p>This account does not have permission to open that area.</p><a className="button" href="/portal">Open customer portal</a><button className="auth-link" onClick={logout}>Sign out</button></AccountFrame>;
- return <><div className="live-auth-bar"><span>Signed in as <strong>{session.user.name}</strong></span><div><a href="/api/auth/account">Manage account</a><button onClick={logout}>Sign out</button></div></div><Dashboard admin={pathname==='/admin'} identity={{name:session.user.name,isAdmin}}/></>;
+ return <Dashboard admin={pathname==='/admin'} identity={{name:session.user.name,isAdmin}} onSignOut={logout}/>;
 }
 createRoot(document.getElementById('root')!).render(<App/>);
