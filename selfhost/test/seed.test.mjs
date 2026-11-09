@@ -9,7 +9,9 @@ test('seeded admin credential matches approved temporary password while requirin
  const data=JSON.parse(credential.credentialData), secret=JSON.parse(credential.secretData);
  assert.equal(credential.temporary,true);
  assert.equal(credential.value,undefined);
- assert.ok(admin.requiredActions.includes('UPDATE_PASSWORD'));
+ assert.deepEqual(admin.requiredActions,['UPDATE_PASSWORD']);
+ assert.equal(realm.verifyEmail,false);
+ assert.equal(realm.resetPasswordAllowed,false);
  assert.ok(realm.passwordPolicy.includes('length(14)'));
  const expected=Buffer.from(secret.value,'base64');
  assert.ok(timingSafeEqual(pbkdf2Sync('123456',Buffer.from(secret.salt,'base64'),data.hashIterations,expected.length,'sha512'),expected));

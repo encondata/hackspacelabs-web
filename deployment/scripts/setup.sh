@@ -35,7 +35,7 @@ if [[ ! -f .env ]]; then
       printf '%s=%s\n' "$key" "$(openssl rand -hex 48)"
     done
     printf 'TOKEN_ENCRYPTION_KEY=%s\n' "$(openssl rand -base64 32)"
-    printf 'KEYCLOAK_BOOTSTRAP_ADMIN=bootstrap-admin\nSMTP_HOST=\nSMTP_PORT=587\nSMTP_FROM=accounts@hackspacelabs.com\nSMTP_USER=\nSMTP_PASSWORD=\nSMTP_AUTH=true\nSMTP_STARTTLS=true\nSMTP_SSL=false\n'
+    printf 'KEYCLOAK_BOOTSTRAP_ADMIN=bootstrap-admin\n'
   } > "$temporary"
   # Atomic create, refusing to replace an env file created concurrently.
   ln "$temporary" .env
@@ -80,10 +80,8 @@ if ! BUILDX_GIT_INFO=false docker compose up -d --build --wait --wait-timeout 18
   echo 'Check docker compose ps and logs for local container, port, or database errors; then rerun install.sh.' >&2
   exit 1
 fi
-if [[ "$access_mode" != keep ]]; then
-  docker compose --profile tools run --rm --no-deps -T configure-auth
-fi
+docker compose --profile tools run --rm --no-deps -T configure-auth
 docker compose ps
-echo "Local services are running. Configure your proxy, DNS, certificates, and SMTP whenever ready."
+echo "Local services are running. Sign in with your username and password. No email setup is required."
 echo "Bootstrap credentials are stored privately in $root/deployment/.env; they are not displayed."
 echo 'See deployment/README.md for proxy headers, account setup, backups, and staging checks.'

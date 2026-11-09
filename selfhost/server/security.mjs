@@ -1,10 +1,10 @@
 import {createCipheriv,createDecipheriv,randomBytes,timingSafeEqual} from 'node:crypto';
 export function safeDestination(value){return value==='/admin'||value==='/portal'?value:null}
 export function identityFromClaims(claims){
- if(!claims||typeof claims.sub!=='string'||typeof claims.email!=='string'||!claims.email||claims.email_verified!==true)throw new Error('Verified identity required');
+ if(!claims||typeof claims.sub!=='string'||!claims.sub)throw new Error('Authenticated identity required');
  const roles=Array.isArray(claims.hsl_roles)?claims.hsl_roles.filter(r=>r==='admin'||r==='customer'):[];
  if(!roles.length)throw new Error('No application role');
- return {id:claims.sub,email:typeof claims.email==='string'?claims.email:'',name:typeof claims.name==='string'?claims.name:typeof claims.preferred_username==='string'?claims.preferred_username:'HackSpaceLabs user',roles:[...new Set(roles)]};
+ return {id:claims.sub,email:typeof claims.email==='string'?claims.email:'',name:typeof claims.name==='string'&&claims.name.trim()?claims.name:typeof claims.preferred_username==='string'?claims.preferred_username:'HackSpaceLabs user',roles:[...new Set(roles)]};
 }
 export function canAccess(user,pathname){return pathname==='/admin'?user?.roles?.includes('admin'):pathname==='/portal'?user?.roles?.some(r=>r==='admin'||r==='customer'):false}
 export function equalSecret(a,b){if(typeof a!=='string'||typeof b!=='string')return false;const x=Buffer.from(a);const y=Buffer.from(b);return x.length===y.length&&timingSafeEqual(x,y)}

@@ -4,10 +4,10 @@
   "enabled": true,
   "sslRequired": "external",
   "registrationAllowed": false,
-  "loginWithEmailAllowed": true,
+  "loginWithEmailAllowed": false,
   "duplicateEmailsAllowed": false,
-  "resetPasswordAllowed": true,
-  "verifyEmail": true,
+  "resetPasswordAllowed": false,
+  "verifyEmail": false,
   "rememberMe": false,
   "editUsernameAllowed": false,
   "loginTheme": "hackspacelabs",
@@ -28,17 +28,6 @@
   "eventsExpiration": 604800,
   "adminEventsEnabled": true,
   "adminEventsDetailsEnabled": false,
-  "smtpServer": {
-    "host": "${HSL_SMTP_HOST}",
-    "port": "${HSL_SMTP_PORT}",
-    "from": "${HSL_SMTP_FROM}",
-    "fromDisplayName": "HackSpaceLabs",
-    "auth": "${HSL_SMTP_AUTH}",
-    "starttls": "${HSL_SMTP_STARTTLS}",
-    "ssl": "${HSL_SMTP_SSL}",
-    "user": "${HSL_SMTP_USER}",
-    "password": "${HSL_SMTP_PASSWORD}"
-  },
   "roles": {
     "client": {
       "hackspacelabs-web": [
@@ -131,9 +120,7 @@
         }
       ],
       "requiredActions": [
-        "UPDATE_PASSWORD",
-        "UPDATE_PROFILE",
-        "VERIFY_EMAIL"
+        "UPDATE_PASSWORD"
       ],
       "clientRoles": {
         "hackspacelabs-web": [

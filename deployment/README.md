@@ -56,11 +56,11 @@ Run the downloaded installer with `--lan-ip YOUR_PRIVATE_IP`. It accepts only RF
 
 LAN mode permits HTTP for the configured private-IP issuer, uses host-only HttpOnly/SameSite=Lax cookies without `Secure`, and continues to validate JWT signatures, issuer, audience, state, nonce, PKCE, and the exact request Host/Origin. It does not disable TLS certificate verification for HTTPS. Use it only on a trusted LAN because credentials traverse HTTP. Keycloak retains its `external` SSL policy, which allows private-IP HTTP. The master realm’s SSL policy is not changed.
 
-Use `--https` to restore the configured APP_HOST/AUTH_HOST URLs and Secure cookies. Existing sessions must sign in again after switching modes. Ordinary updates without a mode flag preserve the selected mode. Configure SMTP and complete the seeded administrator’s required actions as before.
+Use `--https` to restore the configured APP_HOST/AUTH_HOST URLs and Secure cookies. Existing sessions must sign in again after switching modes. Ordinary updates without a mode flag preserve the selected mode. The seeded administrator only has to change the temporary password. No email setup is needed.
 
 ### Startup and updates
 
-First startup generates `deployment/.env` with mode 0600. The installer leaves SMTP unset; configure and test email in Keycloak's Admin Console after startup. Later `.env` edits do not update an already imported realm. The installer does not print credentials. Use the bootstrap account stored in that private file to provision permanent administrators and customers as described below.
+First startup generates `deployment/.env` with mode 0600. The installer applies the username/password login policy to new and existing realms: no email verification, required profile form, or email-based password reset. Existing `.env` SMTP entries are unused and need no changes. The installer does not print credentials. Use the bootstrap account stored in that private file to provision permanent administrators and customers as described below.
 
 Installation checks local containers only. The web process binds `0.0.0.0:3000` immediately, published as `0.0.0.0:8088` by default, and `/healthz` checks the HTTP listener without contacting DNS, TLS, the identity provider, or the database. The public homepage can be opened directly over HTTP at the server IP and web port. Keycloak listens on its published auth port independently of the public proxy. Authentication initializes on demand when first requested; failed discovery is retried on a later request, so configuring the proxy afterward needs no web restart. Login and authenticated pages use the explicitly selected HTTPS or LAN origin and its cookie policy. The installer does not run the optional `scripts/verify.mjs` external checks.
 
@@ -79,19 +79,19 @@ Edit `BIND_ADDRESS`, `WEB_PORT`, and `AUTH_PORT` in `.env` to change published e
 
 1. Open `https://auth.hackspacelabs.com/admin/` and use the **temporary bootstrap administrator** from the private `.env`. This is a Keycloak infrastructure account in the `master` realm, not a HackSpaceLabs website account.
 2. Create a permanent, individually named Keycloak administrator, configure MFA, verify that it works, and remove the temporary bootstrap account. Remove bootstrap credentials from the running environment after bootstrap is complete. Maintain a documented recovery process.
-3. Select the **hackspacelabs** realm. Confirm Realm settings → Email and test SMTP. Email verification and password-reset links cannot be delivered until SMTP is configured successfully.
-4. On a **fresh realm**, the website administrator is **`admin` / `123456`** with the `hackspacelabs-web` client role `admin`. Keycloak requires a password change, profile completion (including your email), and email verification before issuing the login tokens used by the website. The seed uses Keycloak’s hashed-credential import format so the short temporary password does not prevent realm startup. The replacement password must satisfy the realm policy (at least 14 characters). Configure SMTP first. This website account is separate from the randomly generated infrastructure bootstrap administrator in the `master` realm.
+3. Select the **hackspacelabs** realm. No email server is required.
+4. On a **fresh realm**, the website administrator is **`admin` / `123456`** with the `hackspacelabs-web` client role `admin`. Keycloak requires only a password change before issuing the login tokens used by the website. Email, first name, and last name are optional. The seed uses Keycloak’s hashed-credential import format so the short temporary password does not prevent realm startup. The replacement password must satisfy the realm policy (at least 14 characters). This website account is separate from the randomly generated infrastructure bootstrap administrator in the `master` realm.
 
    For additional individual users, assign a role from client **hackspacelabs-web**:
    - `customer`: access `/portal` only.
    - `admin`: access `/admin` and `/portal`.
    No role is granted by email address, URL, browser storage, or being the first person to sign in. Accounts without an assigned application role are denied.
-5. Use required-action emails to verify email and set an initial password. Do not share permanent passwords. For administrators, also require `CONFIGURE_TOTP` (or configure an appropriately enforced passkey/MFA policy) before granting operational access.
+5. For additional users, set a temporary password in the Credentials tab and require `UPDATE_PASSWORD`. An administrator can reset forgotten passwords there; no recovery email workflow is configured.
 6. Visit the website `/login`, choose **Continue to sign in**, and complete the branded Keycloak flow. The gateway routes customers to `/portal` and admins to `/admin`.
 
-**Existing installations:** startup import skips an existing realm. Updating or reinstalling the code never resets an administrator password. If the realm already exists, use its infrastructure administrator to create `admin`, assign the website `admin` client role, set `123456` as a **temporary** password, and require `UPDATE_PASSWORD`, `UPDATE_PROFILE`, and `VERIFY_EMAIL`. Do not overwrite an existing account or delete database volumes.
+**Existing installations:** every installer run applies an idempotent migration. It removes `VERIFY_EMAIL`, `UPDATE_PROFILE`, and `VERIFY_PROFILE` gates, makes email/name fields optional, and disables email-based recovery. It preserves usernames, stored passwords, roles, and any pending `UPDATE_PASSWORD` action. An administrator who already changed their password is not reset or forced to change it again. No database volumes are deleted. The private infrastructure administrator credentials in `.env` must remain valid for this migration.
 
-Public account registration is disabled. Account provisioning is administrator-controlled. Keycloak handles password reset on its login screen and account management at `/realms/hackspacelabs/account/`.
+Public account registration is disabled. Account provisioning is administrator-controlled. Administrators handle password resets in Keycloak; account management remains available at `/realms/hackspacelabs/account/`.
 
 ## Role checks, sessions, and logout
 
@@ -106,7 +106,7 @@ Public account registration is disabled. Account provisioning is administrator-c
 | Endpoint | Behavior |
 | --- | --- |
 | `GET /api/auth/login` | Starts OIDC code + PKCE. Optional `returnTo` accepts only `/portal` or `/admin`. |
-| `GET /api/auth/callback` | One-time state/nonce/PKCE validation, verified email and application role checks, session rotation. |
+| `GET /api/auth/callback` | One-time state/nonce/PKCE validation, authenticated subject and application role checks, session rotation. |
 | `GET /api/auth/session` | 401 when anonymous; otherwise returns the user profile, roles, logout CSRF token, and `sampleData: true`. Never returns OAuth tokens. |
 | `POST /api/auth/logout` | Requires exact Origin and `x-csrf-token`; deletes local session and returns the identity-provider logout URL. |
 | `GET /api/auth/account` | Requires a session, then redirects to Keycloak account management. |
@@ -130,7 +130,7 @@ Register **one OIDC client per application**, and separate production and develo
 
 `postgres/init.sh` creates databases and the `web_sessions` table **only on an empty PostgreSQL volume**. Changing environment passwords later does not change existing database roles. Apply explicit, coordinated migrations for existing installations; do not delete volumes to apply configuration changes.
 
-Realm import is also first-boot setup: Keycloak skips an already existing realm. Later SMTP, client-secret, or role changes must be made through the Admin Console/API and coordinated with the gateway's environment. Do not force-import over a running identity database.
+Realm import is also first-boot setup: Keycloak skips an already existing realm. Later client-secret or role changes must be made through the Admin Console/API and coordinated with the gateway's environment. Do not force-import over a running identity database.
 
 Back up the PostgreSQL cluster (including roles), the private `.env` / token-encryption key using encrypted, access-controlled backups. Keycloak's signing keys and identity records live in its database. Realm export alone is not a complete backup of accounts/sessions/events. Test restoration on an isolated staging host before relying on it. Backup output contains identity data and credentials; never commit it.
 
@@ -143,12 +143,12 @@ Rotating `SESSION_SECRET` signs users out. Losing or rotating `TOKEN_ENCRYPTION_
 Implemented automated tests cover:
 
 - OIDC code exchange with actual HTTP discovery, JWKS, signed JWTs, and PKCE using a **test issuer**, not a real Keycloak container.
-- Anonymous denial, customer/admin roles, missing roles, unverified email, wrong signatures/issuer/audience/nonce, state tampering, and callback replay.
+- Anonymous denial, customer/admin roles, missing roles, email-free accounts, wrong signatures/issuer/audience/nonce, state tampering, and callback replay.
 - Session rotation, CSRF/origin checks, logout, role refresh, revoked refresh tokens, absolute expiration, safe redirect targets, and token-encryption tamper detection.
 - Real temporary PostgreSQL: database initialization, persisted sessions reused by a second gateway instance, encrypted token storage, logout deletion, and restricted database privileges.
 - Production frontend build and Docker Compose configuration parsing.
 
-GitHub CI now verifies both Docker image builds, web startup with networking disabled, real Keycloak realm import, existing-realm URL migration, and a LAN OIDC authorization redirect. **Themed browser login/password-change/reset/MFA flows, SMTP delivery, public DNS/HTTPS, and the complete authenticated browser session still require verification on the target server.** No DNS changes or live accounts were created. The realm template includes the explicitly requested temporary website credential `admin` / `123456`; infrastructure secrets are generated privately on installation.
+GitHub CI now verifies both Docker image builds, web startup with networking disabled, real Keycloak realm import, existing-realm URL migration, and a LAN OIDC authorization redirect. **Themed browser login/password-change/reset/MFA flows, public DNS/HTTPS, and the complete authenticated browser session still require verification on the target server.** No DNS changes or live accounts were created. The realm template includes the explicitly requested temporary website credential `admin` / `123456`; infrastructure secrets are generated privately on installation.
 
 Run protocol tests from the repository root:
 
@@ -165,7 +165,7 @@ For the database test, use only a dedicated disposable database initialized with
 TEST_DATABASE_URL='postgresql://...' node --test selfhost/test/postgres.integration.mjs
 ```
 
-Before enabling real users, verify customer login and admin denial in one browser, admin login in another, password reset and verification emails, MFA enrollment/login, logout from both the website and SSO, role removal within the refresh interval, and an outage of the identity service. Confirm that new external application clients can complete their own independent OIDC flow.
+Before enabling real users, verify customer login and admin denial in one browser, admin login in another, mandatory first-login password change, logout from both the website and SSO, role removal within the refresh interval, and an outage of the identity service. Confirm that new external application clients can complete their own independent OIDC flow.
 
 ## Primary references
 

@@ -35,14 +35,6 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_PASSWORD:?Required for first startup}
       HSL_APP_ORIGIN: ${APP_ORIGIN:-https://${APP_HOST:-hackspacelabs.com}}
       HSL_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?Required}
-      HSL_SMTP_HOST: ${SMTP_HOST:-}
-      HSL_SMTP_PORT: ${SMTP_PORT:-587}
-      HSL_SMTP_FROM: ${SMTP_FROM:-accounts@hackspacelabs.com}
-      HSL_SMTP_USER: ${SMTP_USER:-}
-      HSL_SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      HSL_SMTP_AUTH: ${SMTP_AUTH:-true}
-      HSL_SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
-      HSL_SMTP_SSL: ${SMTP_SSL:-false}
     depends_on:
       postgres: {condition: service_healthy}
     networks: [backend]

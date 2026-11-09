@@ -22,7 +22,7 @@ Route each hostname at `/` to its upstream port. Setup and local listener health
 
 Existing installations are not reset by updates: realm import only seeds an empty realm.
 
-**[Full deployment guide](deployment/README.md)** covers proxy headers, bootstrap accounts, SMTP, customer/admin roles, future OAuth clients, backups, and upgrades. See [Nginx example](deployment/reverse-proxy.nginx.conf).
+**[Full deployment guide](deployment/README.md)** covers proxy headers, bootstrap accounts, customer/admin roles, future OAuth clients, backups, and upgrades. See [Nginx example](deployment/reverse-proxy.nginx.conf).
 
 ## Direct LAN login before proxy setup
 
@@ -34,11 +34,11 @@ curl -fsSL https://raw.githubusercontent.com/encondata/hackspacelabs-web/main/in
 
 This configures the website and Keycloak for HTTP on their existing ports and updates callback URLs in the existing realm. Database contents, account passwords, and roles are preserved. This uses HTTP cookies and transmits login credentials over your trusted LAN; use HTTPS for public access. The infrastructure bootstrap credentials in `.env` must still belong to a valid administrator for the URL migration.
 
-To switch to the configured HTTPS hostnames later, rerun the same installer with `--https` instead of `--lan-ip YOUR_PRIVATE_IP`. No certificates or DNS checks are added to installation. SMTP/email verification requirements are unchanged.
+To switch to the configured HTTPS hostnames later, rerun the same installer with `--https` instead of `--lan-ip YOUR_PRIVATE_IP`. No certificates or DNS checks are added to installation. No email address or SMTP setup is required.
 
 ## Status
 
-The authentication protocol and PostgreSQL session tests passed during development, and the production frontend builds. GitHub CI validates both Docker builds, offline web startup, real Keycloak realm import, existing-realm URL migration, and the LAN OIDC authorization redirect. Full browser password-change/MFA flows, email delivery, and public HTTPS login still require deployment verification. Fresh installations seed the website account **`admin` / `123456`** with a mandatory password change. Complete the profile and email verification before portal access; configure SMTP first. Infrastructure credentials remain randomly generated.
+The authentication protocol and PostgreSQL session tests passed during development, and the production frontend builds. GitHub CI validates both Docker builds, offline web startup, real Keycloak realm import, existing-realm URL migration, and the LAN OIDC authorization redirect. Full browser password-change/MFA flows and public HTTPS login still require deployment verification. Fresh installations seed the website account **`admin` / `123456`** with a mandatory password change. The only required first-login action is changing the temporary password. No email address, profile form, verification email, or SMTP server is required. Infrastructure credentials remain randomly generated.
 
 ## Development checks
 

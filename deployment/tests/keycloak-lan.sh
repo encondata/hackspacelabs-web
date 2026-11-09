@@ -12,10 +12,12 @@ docker tag hackspacelabs-auth:ci hsl-ci-lan-keycloak
 docker compose -p hsl-ci-lan up -d --no-build --wait --wait-timeout 180
 # Complete the original realm startup before changing the endpoints.
 docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T configure-auth
+docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T -v "$(pwd)/tests:/tests:ro" --entrypoint node configure-auth /tests/email-policy.mjs seed
 lan_ip=$(hostname -I | awk '{print $1}')
 printf '\nAUTH_MODE=lan\nAPP_ORIGIN=http://%s:8088\nAUTH_ORIGIN=http://%s:8089\n' "$lan_ip" "$lan_ip" >> .env
 docker compose -p hsl-ci-lan up -d --no-build --wait --wait-timeout 180
 docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T configure-auth
+docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T -v "$(pwd)/tests:/tests:ro" --entrypoint node configure-auth /tests/email-policy.mjs verify
 headers=$(mktemp)
 status=$(curl --noproxy '*' --retry 4 --retry-all-errors --max-time 20 -sS -D "$headers" -o /dev/null -w '%{http_code}' "http://$lan_ip:8088/api/auth/login")
 [[ "$status" == 303 ]] || { echo "LAN login failed: HTTP $status"; docker compose -p hsl-ci-lan logs --tail=20 web; exit 1; }
