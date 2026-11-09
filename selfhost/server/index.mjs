@@ -1,4 +1,5 @@
 import path from 'node:path';
+import {createManagement} from './management.mjs';
 import {fileURLToPath} from 'node:url';
 import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
@@ -11,6 +12,6 @@ const pool=new pg.Pool({connectionString:config.databaseUrl,max:10,connectionTim
 pool.on('error',()=>console.error('PostgreSQL connection unavailable'));
 const PgStore=connectPgSimple(session);const store=new PgStore({pool,tableName:'web_sessions',createTableIfMissing:false,pruneSessionInterval:900});
 const oidc=deferredOidc(config);
-const app=createApp({config,store,oidc,publicDir:path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../dist/public')});
+const app=createApp({config,store,oidc,management:createManagement(config),publicDir:path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../dist/public')});
 const server=app.listen(config.port,config.host,()=>console.log(`HackSpaceLabs gateway listening on ${config.host}:${server.address().port}`));
 for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{server.close(()=>{store.close();pool.end().then(()=>process.exit(0))});setTimeout(()=>process.exit(1),10000).unref()});

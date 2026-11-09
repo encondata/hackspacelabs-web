@@ -26,3 +26,29 @@ if(process.argv[2]==='seed'){
  for(const action of await api('/authentication/required-actions'))if(['VERIFY_EMAIL','UPDATE_PROFILE','VERIFY_PROFILE'].includes(action.alias)&&(action.enabled||action.defaultAction))throw new Error('Unrequested action remains enabled');
  console.log('Existing email/profile gates removed; admin still requires password change, without an email address.');
 }
+
+// Exercise the actual realm-scoped service account and the routes used by the portal.
+if(process.argv[2]==='verify'){
+ const {createHmac}=await import('node:crypto');
+ const secret=createHmac('sha256',process.env.OIDC_CLIENT_SECRET).update('hackspacelabs-management-v1').digest('hex');
+ const serviceResponse=await fetch(base+'/realms/hackspacelabs/protocol/openid-connect/token',{method:'POST',body:new URLSearchParams({grant_type:'client_credentials',client_id:'hackspacelabs-management',client_secret:secret})});
+ if(!serviceResponse.ok)throw new Error('Portal management service account cannot authenticate');
+ const serviceToken=(await serviceResponse.json()).access_token;
+ async function managed(route,method='GET',body){const r=await fetch(base+'/admin/realms/hackspacelabs'+route,{method,headers:{Authorization:'Bearer '+serviceToken,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});if(!r.ok)throw new Error('Management integration failed '+method+' '+route+' '+r.status);const raw=await r.text();return raw?JSON.parse(raw):null}
+ await managed('/users','POST',{username:'portal-integration-user',enabled:true,credentials:[{type:'password',value:'test-password-in-disposable-ci',temporary:true}],requiredActions:['UPDATE_PASSWORD']});
+ const [user]=await managed('/users?username=portal-integration-user&exact=true');
+ await managed('/groups','POST',{name:'Portal integration group'});
+ const [group]=await managed('/groups?search=Portal%20integration%20group');
+ await managed('/users/'+user.id+'/groups/'+group.id,'PUT');
+ const customer=await managed('/roles/customer');
+ await managed('/groups/'+group.id+'/role-mappings/realm','POST',[customer]);
+ if(!(await managed('/users/'+user.id+'/role-mappings/realm/composite')).some(r=>r.name==='customer'))throw new Error('Group roles did not propagate');
+ await managed('/users/'+user.id+'/reset-password','PUT',{type:'password',value:'replacement-disposable-password',temporary:true});
+ await managed('/clients','POST',{clientId:'portal-integration-app',protocol:'openid-connect',publicClient:false,standardFlowEnabled:true,redirectUris:['https://app.example/callback'],attributes:{'pkce.code.challenge.method':'S256'}});
+ const [client]=await managed('/clients?clientId=portal-integration-app');
+ if(!(await managed('/clients/'+client.id+'/client-secret')).value)throw new Error('Client secret missing');
+ await managed('','PUT',{passwordPolicy:''});
+ if((await managed('')).passwordPolicy)throw new Error('Password policy could not be cleared');
+ await managed('/clients/'+client.id,'DELETE');await managed('/users/'+user.id,'DELETE');await managed('/groups/'+group.id,'DELETE');
+ console.log('Real management service account: users, passwords, groups, inherited roles, OIDC clients, secrets and settings verified.');
+}

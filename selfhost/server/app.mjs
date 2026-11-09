@@ -1,4 +1,5 @@
 import express from 'express';
+import {managementRouter} from './management.mjs';
 import session from 'express-session';
 import helmet from 'helmet';
 import {rateLimit} from 'express-rate-limit';
@@ -8,7 +9,7 @@ import {identityFromClaims,canAccess,safeDestination,equalSecret,tokenCipher} fr
 const save=s=>new Promise((resolve,reject)=>s.save(error=>error?reject(error):resolve()));
 const regenerate=s=>new Promise((resolve,reject)=>s.regenerate(error=>error?reject(error):resolve()));
 const destroy=s=>new Promise((resolve,reject)=>s.destroy(error=>error?reject(error):resolve()));
-export function createApp({config,store,oidc,publicDir,healthy=async()=>true,log=console}){
+export function createApp({config,store,oidc,publicDir,healthy=async()=>true,management,log=console}){
  const app=express();const cipher=tokenCipher(config.encryptionKey);const refreshes=new Map();
  const secureCookies=config.secureCookies??config.production;
  const cookieName=secureCookies?'__Host-hsl.sid':(config.production?'hsl.lan.sid':'hsl.test.sid');
@@ -19,7 +20,7 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,log
   const raw=req.originalUrl.split('?')[0];let decoded;try{decoded=decodeURIComponent(raw)}catch{return res.sendStatus(400)}
   if(decoded!==raw||raw.includes('\\')||raw.includes('//')||raw.includes('/.')||/[\x00-\x20\x7f]/.test(raw))return res.sendStatus(400);
   if(req.path==='/healthz')return next();
-  const protectedRequest=req.path.startsWith('/api/auth/')||req.path==='/admin'||req.path==='/portal';
+  const protectedRequest=req.path.startsWith('/api/')||req.path==='/admin'||req.path==='/portal';
   if(config.production&&protectedRequest&&((secureCookies&&!req.secure)||req.get('host')!==new URL(config.origin).host))return res.status(400).send('Invalid request origin');
   if(req.path.startsWith('/api/')||req.path==='/portal'||req.path==='/admin'||req.path==='/login')res.set('Cache-Control','no-store');
   next();
@@ -71,6 +72,7 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,log
   await destroy(req.session);clearCookie(res);res.json({redirect:await oidc.logout(idToken)});
  });
  app.get('/api/auth/account',async(req,res)=>{const user=await userFor(req,res);if(!user)return res.redirect(303,'/login');res.redirect(303,oidc.account)});
+ if(management)app.use('/api/admin',managementRouter({api:management,userFor,config,log}));
  app.use('/api',(_req,res)=>res.status(404).json({error:'No live environment or ticket API is configured. These features use sample data.'}));
  app.get(['/admin','/portal'],async(req,res)=>{
   const user=await userFor(req,res);if(!user)return res.redirect(303,'/login?returnTo='+encodeURIComponent(req.path));

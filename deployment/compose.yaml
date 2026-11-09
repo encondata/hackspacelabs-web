@@ -74,6 +74,7 @@ services:
     environment:
       APP_ORIGIN: ${APP_ORIGIN:-https://${APP_HOST:-hackspacelabs.com}}
       AUTH_ORIGIN: ${AUTH_ORIGIN:-https://${AUTH_HOST:-auth.hackspacelabs.com}}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?Required}
       ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN:-bootstrap-admin}
       ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_PASSWORD:?Required}
     networks: [backend]

@@ -176,3 +176,16 @@ Before enabling real users, verify customer login and admin denial in one browse
 - [Keycloak theme inheritance](https://www.keycloak.org/ui-customization/themes)
 - [openid-client](https://github.com/panva/openid-client)
 - [Keycloak reverse proxy](https://www.keycloak.org/server/reverseproxy)
+
+### Identity management in the HackSpaceLabs portal
+
+Administrators now have **Users**, **Groups**, **Connected apps**, and **Authentication** in the portal sidebar. These operate on live Keycloak records; the environment and support sections remain samples.
+
+- Users: create username accounts, edit optional profile fields, enable/disable access, assign realm roles and groups, set temporary passwords (required change next login, no email), and end sessions.
+- Groups: create/rename groups, view members and assign inherited realm roles. Create additional realm roles from either user or group details.
+- Connected apps: register OIDC apps using Authorization Code + PKCE S256, edit exact callback URLs and web origins, enable/disable apps, and reveal/rotate confidential client secrets. Internal platform clients are read-only to avoid breaking the portal login or management connection.
+- Authentication: view issuer/discovery URLs, configure password policy (blank removes additional requirements), self-registration, remember-me, brute-force protection, and provider token/session lifetimes. The web session also retains its own 30-minute idle and 8-hour absolute limits.
+
+Updating through `install.sh` provisions a dedicated `hackspacelabs-management` service account automatically. It is restricted to the HackSpaceLabs realm. Its secret is derived from the existing private OIDC client secret with a separate HMAC purpose; no new manual setup is needed. The web container does not receive infrastructure/bootstrap administrator credentials. Requests require a live admin role; writes additionally require the existing same-origin and CSRF checks. Secrets and passwords are never included in audit log messages. Management API failure does not affect public homepage or local health checks.
+
+This is a native portal UI, not an embedded or linked Keycloak management console. Advanced provider features such as LDAP federation, custom authentication flows, and external identity brokering are not yet exposed by this interface.

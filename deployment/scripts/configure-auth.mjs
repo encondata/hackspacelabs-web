@@ -1,3 +1,4 @@
+import {createHmac} from 'node:crypto';
 // One-shot client URL migration. Never creates users, changes passwords, or prints tokens.
 const base='http://keycloak:8080';
 const app=process.env.APP_ORIGIN;
@@ -18,7 +19,7 @@ if(!token)throw new Error('Local Keycloak did not become ready; retry the instal
 async function api(route,options={}){
   const response=await fetch(base+'/admin/realms/hackspacelabs'+route,{...options,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},signal:AbortSignal.timeout(10000)});
   if(!response.ok)throw new Error('Keycloak configuration request failed with status '+response.status);
-  return response.status===204?undefined:response.json();
+  const contents=await response.text();return contents?JSON.parse(contents):undefined;
 }
 const clients=await api('/clients?clientId=hackspacelabs-web');
 if(clients.length!==1)throw new Error('Expected one HackSpaceLabs website client');
@@ -54,3 +55,16 @@ if(policy.verifyEmail||policy.resetPasswordAllowed)throw new Error('Email-free l
 const updated=await api('/clients/'+encodeURIComponent(client.id));
 if(updated.redirectUris?.[0]!==app+'/api/auth/callback'||updated.webOrigins?.[0]!==app)throw new Error('Keycloak client URL verification failed');
 console.log('Configured username/password login without email or profile requirements. Removed obsolete actions from '+adjusted+' account(s). Existing passwords, roles, and pending password changes were preserved.');
+
+// Dedicated realm-scoped service account; bootstrap credentials never enter the web container.
+const managementId='hackspacelabs-management';
+const managementSecret=createHmac('sha256',process.env.OIDC_CLIENT_SECRET).update('hackspacelabs-management-v1').digest('hex');
+const representation={clientId:managementId,protocol:'openid-connect',enabled:true,publicClient:false,secret:managementSecret,serviceAccountsEnabled:true,standardFlowEnabled:false,directAccessGrantsEnabled:false,implicitFlowEnabled:false};
+let [management]=await api('/clients?clientId='+managementId);
+if(!management){await api('/clients',{method:'POST',body:JSON.stringify(representation)});[management]=await api('/clients?clientId='+managementId)}
+else await api('/clients/'+management.id,{method:'PUT',body:JSON.stringify(representation)});
+const service=await api('/clients/'+management.id+'/service-account-user');
+const [realmManagement]=await api('/clients?clientId=realm-management');
+const role=await api('/clients/'+realmManagement.id+'/roles/realm-admin');
+await api('/users/'+service.id+'/role-mappings/clients/'+realmManagement.id,{method:'POST',body:JSON.stringify([role])});
+console.log('Portal identity management configured.');
