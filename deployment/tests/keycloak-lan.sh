@@ -4,7 +4,7 @@ set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 [[ ! -e .env ]] || { echo 'Use only an isolated checkout without deployment/.env.' >&2; exit 1; }
 node scripts/init-env.mjs
-cleanup() { docker compose -p hsl-ci-lan --profile tools down -v >/dev/null 2>&1 || true; rm -f .env; }
+cleanup() { result=$?; if ((result!=0)); then docker compose -p hsl-ci-lan logs --tail=80 keycloak postgres web; fi; docker compose -p hsl-ci-lan --profile tools down -v >/dev/null 2>&1 || true; rm -f .env; }
 trap cleanup EXIT
 docker tag hackspacelabs-web:ci hsl-ci-lan-web
 docker tag hackspacelabs-web:ci hackspacelabs-web
