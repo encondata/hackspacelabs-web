@@ -16,7 +16,8 @@ main() {
   # Lock outside the checkout; a failed install leaves the code and data intact.
   local lock="${destination}.install-lock"
   mkdir -- "$lock" 2>/dev/null || { echo "Install already running, or stale lock: $lock" >&2; exit 1; }
-  trap 'rmdir -- "$lock"' EXIT
+  # Capture the quoted path now: Bash may unwind local variables before EXIT.
+  trap "rmdir -- $(printf '%q' "$lock")" EXIT
   if [[ -d "$destination/.git" ]]; then
     [[ "$(git -C "$destination" rev-parse --show-toplevel)" == "$destination" ]] || exit 1
     origin=$(git -C "$destination" remote get-url origin)
