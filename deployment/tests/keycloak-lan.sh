@@ -25,3 +25,5 @@ grep -qi "location: http://$lan_ip:8089/realms/hackspacelabs/protocol/openid-con
 grep -qi 'set-cookie: hsl.lan.sid=' "$headers"
 rm -f "$headers"
 echo 'Existing Keycloak realm migrated and real LAN OIDC login redirected successfully.'
+
+docker compose -p hsl-ci-lan exec -T web node --input-type=module < tests/profile-store.mjs

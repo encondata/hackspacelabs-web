@@ -1,4 +1,5 @@
 import express from 'express';
+import {profileRouter} from './profile.mjs';
 import {managementRouter} from './management.mjs';
 import session from 'express-session';
 import helmet from 'helmet';
@@ -9,7 +10,7 @@ import {identityFromClaims,canAccess,safeDestination,equalSecret,tokenCipher} fr
 const save=s=>new Promise((resolve,reject)=>s.save(error=>error?reject(error):resolve()));
 const regenerate=s=>new Promise((resolve,reject)=>s.regenerate(error=>error?reject(error):resolve()));
 const destroy=s=>new Promise((resolve,reject)=>s.destroy(error=>error?reject(error):resolve()));
-export function createApp({config,store,oidc,publicDir,healthy=async()=>true,management,log=console}){
+export function createApp({config,store,oidc,publicDir,healthy=async()=>true,management,profiles,log=console}){
  const app=express();const cipher=tokenCipher(config.encryptionKey);const refreshes=new Map();
  const secureCookies=config.secureCookies??config.production;
  const cookieName=secureCookies?'__Host-hsl.sid':(config.production?'hsl.lan.sid':'hsl.test.sid');
@@ -64,7 +65,8 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,man
  });
  app.get('/api/auth/session',async(req,res)=>{
   const user=await userFor(req,res);if(!user)return res.status(401).json({authenticated:false});
-  res.json({authenticated:true,user,csrfToken:req.session.csrf,sampleData:true});
+  const profile=profiles?await profiles.get(user.id):{};
+  res.json({authenticated:true,user:{...user,name:profile.preferredName||user.name,avatarVersion:profile.avatarVersion||null},csrfToken:req.session.csrf,sampleData:true});
  });
  app.post('/api/auth/logout',async(req,res)=>{
   if(req.get('origin')!==config.origin||!equalSecret(req.get('x-csrf-token')||req.body?.csrf,req.session.csrf))return res.status(403).json({error:'Invalid logout request'});
@@ -72,6 +74,7 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,man
   await destroy(req.session);clearCookie(res);res.json({redirect:await oidc.logout(idToken)});
  });
  app.get('/api/auth/account',async(req,res)=>{const user=await userFor(req,res);if(!user)return res.redirect(303,'/login');res.redirect(303,'/me')});
+ if(profiles)app.use('/api/me',profileRouter({profiles,management,userFor,config}));
  if(management)app.use('/api/admin',managementRouter({api:management,userFor,config,log}));
  app.use('/api',(_req,res)=>res.status(404).json({error:'No live environment or ticket API is configured. These features use sample data.'}));
  app.get(['/admin','/portal','/me'],async(req,res)=>{
