@@ -1,0 +1,25 @@
+{
+ email {$ACME_EMAIL}
+ admin off
+}
+{$AUTH_HOST} {
+ encode zstd gzip
+ header Strict-Transport-Security "max-age=31536000"
+ reverse_proxy keycloak:8080 {
+  header_up X-Forwarded-Proto https
+  header_up X-Forwarded-Host {$AUTH_HOST}
+  header_up X-Forwarded-Port 443
+  header_up X-Forwarded-For {remote_host}
+ }
+}
+{$APP_HOST} {
+ encode zstd gzip
+ @health path /healthz
+ respond @health 404
+ reverse_proxy web:3000 {
+  header_up Host {$APP_HOST}
+  header_up X-Forwarded-Proto https
+  header_up X-Forwarded-Host {$APP_HOST}
+  header_up X-Forwarded-For {remote_host}
+ }
+}

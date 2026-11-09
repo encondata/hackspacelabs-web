@@ -1,0 +1,120 @@
+{
+  "realm": "hackspacelabs",
+  "displayName": "HackSpaceLabs",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "verifyEmail": true,
+  "rememberMe": false,
+  "editUsernameAllowed": false,
+  "loginTheme": "hackspacelabs",
+  "emailTheme": "keycloak",
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "passwordPolicy": "length(14) and notUsername(undefined) and notEmail(undefined) and passwordHistory(5)",
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
+  "clientSessionIdleTimeout": 1800,
+  "clientSessionMaxLifespan": 28800,
+  "revokeRefreshToken": false,
+  "eventsEnabled": true,
+  "eventsExpiration": 604800,
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": false,
+  "smtpServer": {
+    "host": "${HSL_SMTP_HOST}",
+    "port": "${HSL_SMTP_PORT}",
+    "from": "${HSL_SMTP_FROM}",
+    "fromDisplayName": "HackSpaceLabs",
+    "auth": "${HSL_SMTP_AUTH}",
+    "starttls": "${HSL_SMTP_STARTTLS}",
+    "ssl": "${HSL_SMTP_SSL}",
+    "user": "${HSL_SMTP_USER}",
+    "password": "${HSL_SMTP_PASSWORD}"
+  },
+  "roles": {
+    "client": {
+      "hackspacelabs-web": [
+        {
+          "name": "customer",
+          "description": "Access to the sample customer portal"
+        },
+        {
+          "name": "admin",
+          "description": "Access to the sample admin and customer portals"
+        }
+      ]
+    }
+  },
+  "clients": [
+    {
+      "clientId": "hackspacelabs-web",
+      "name": "HackSpaceLabs website",
+      "protocol": "openid-connect",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${HSL_CLIENT_SECRET}",
+      "rootUrl": "${HSL_APP_ORIGIN}",
+      "baseUrl": "${HSL_APP_ORIGIN}/",
+      "redirectUris": [
+        "${HSL_APP_ORIGIN}/api/auth/callback"
+      ],
+      "webOrigins": [
+        "${HSL_APP_ORIGIN}"
+      ],
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "${HSL_APP_ORIGIN}/login",
+        "oauth2.device.authorization.grant.enabled": "false",
+        "oidc.ciba.grant.enabled": "false"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "profile",
+        "email"
+      ],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "HackSpaceLabs application roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "usermodel.clientRoleMapping.clientId": "hackspacelabs-web",
+            "claim.name": "hsl_roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "clientScopeMappings": {
+    "hackspacelabs-web": [
+      {
+        "client": "hackspacelabs-web",
+        "roles": [
+          "customer",
+          "admin"
+        ]
+      }
+    ]
+  }
+}

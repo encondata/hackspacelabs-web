@@ -1,0 +1,12 @@
+.git
+**/node_modules
+**/dist
+**/.env*
+**/secrets
+**/backups
+work
+outputs
+.wrangler
+.sites-runtime
+.vinext
+.next

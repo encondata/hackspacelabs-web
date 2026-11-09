@@ -1,0 +1,40 @@
+name: Validate and build
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            selfhost/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix selfhost
+      - run: npm run build
+      - run: npm test
+      - run: python3 deployment/tests/test_installer.py
+      - run: bash -n install.sh deployment/scripts/setup.sh deployment/postgres/init.sh
+      - name: Validate Compose (disposable configuration only)
+        run: docker compose -f deployment/compose.yaml config --quiet
+        env:
+          POSTGRES_PASSWORD: ci-placeholder
+          KEYCLOAK_DB_PASSWORD: ci-placeholder
+          APP_DB_PASSWORD: ci-placeholder
+          KEYCLOAK_BOOTSTRAP_PASSWORD: ci-placeholder
+          OIDC_CLIENT_SECRET: ci-placeholder
+          SESSION_SECRET: ci-placeholder
+          TOKEN_ENCRYPTION_KEY: ci-placeholder
+      - name: Build web image
+        run: docker build -f deployment/Dockerfile -t hackspacelabs-web:ci .
+      - name: Build Keycloak image
+        run: docker build -f deployment/keycloak/Dockerfile -t hackspacelabs-auth:ci deployment

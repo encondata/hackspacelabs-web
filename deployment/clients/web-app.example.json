@@ -1,0 +1,21 @@
+{
+  "clientId": "replace-with-your-app-id",
+  "name": "Replace with your application name",
+  "protocol": "openid-connect",
+  "enabled": true,
+  "publicClient": false,
+  "clientAuthenticatorType": "client-secret",
+  "standardFlowEnabled": true,
+  "directAccessGrantsEnabled": false,
+  "implicitFlowEnabled": false,
+  "serviceAccountsEnabled": false,
+  "fullScopeAllowed": false,
+  "redirectUris": ["https://app.example.com/oauth/callback"],
+  "webOrigins": ["https://app.example.com"],
+  "attributes": {
+    "pkce.code.challenge.method": "S256",
+    "post.logout.redirect.uris": "https://app.example.com/login"
+  },
+  "defaultClientScopes": ["profile", "email"],
+  "optionalClientScopes": []
+}

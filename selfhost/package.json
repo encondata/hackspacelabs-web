@@ -1,0 +1,27 @@
+{
+  "name": "hackspacelabs-auth-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node server/index.mjs",
+    "build": "vite build --config web/vite.config.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "connect-pg-simple": "10.0.0",
+    "express": "5.3.0",
+    "express-rate-limit": "8.7.3",
+    "express-session": "1.19.0",
+    "helmet": "8.3.0",
+    "openid-client": "6.8.9",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "jose": "6.2.16",
+    "supertest": "7.3.2"
+  }
+}

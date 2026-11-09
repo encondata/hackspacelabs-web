@@ -1,0 +1,79 @@
+name: hackspacelabs
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate deployment/.env first}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Generate deployment/.env first}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Generate deployment/.env first}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sh:/docker-entrypoint-initdb.d/01-hackspacelabs.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+  keycloak:
+    build:
+      context: .
+      dockerfile: keycloak/Dockerfile
+    restart: unless-stopped
+    command: [start, --optimized, --import-realm]
+    ports: ["${BIND_ADDRESS:-0.0.0.0}:${AUTH_PORT:-8089}:8080"]
+    environment:
+      KC_DB_URL: jdbc:postgresql://postgres:5432/hsl_identity
+      KC_DB_USERNAME: hsl_identity
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Required}
+      KC_HOSTNAME: https://${AUTH_HOST:-auth.hackspacelabs.com}
+      KC_HOSTNAME_STRICT: 'true'
+      KC_HTTP_ENABLED: 'true'
+      KC_PROXY_HEADERS: xforwarded
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN:-bootstrap-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_PASSWORD:?Required for first startup}
+      HSL_APP_ORIGIN: https://${APP_HOST:-hackspacelabs.com}
+      HSL_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?Required}
+      HSL_SMTP_HOST: ${SMTP_HOST:-}
+      HSL_SMTP_PORT: ${SMTP_PORT:-587}
+      HSL_SMTP_FROM: ${SMTP_FROM:-accounts@hackspacelabs.com}
+      HSL_SMTP_USER: ${SMTP_USER:-}
+      HSL_SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      HSL_SMTP_AUTH: ${SMTP_AUTH:-true}
+      HSL_SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      HSL_SMTP_SSL: ${SMTP_SSL:-false}
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [backend]
+  web:
+    ports: ["${BIND_ADDRESS:-0.0.0.0}:${WEB_PORT:-8088}:3000"]
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      APP_ORIGIN: https://${APP_HOST:-hackspacelabs.com}
+      OIDC_ISSUER: https://${AUTH_HOST:-auth.hackspacelabs.com}/realms/hackspacelabs
+      OIDC_CLIENT_ID: hackspacelabs-web
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?Required}
+      SESSION_SECRET: ${SESSION_SECRET:?Required}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Required}
+      DATABASE_URL: postgres://hsl_web:${APP_DB_PASSWORD:?Required}@postgres:5432/hsl_sessions
+    depends_on:
+      postgres: {condition: service_healthy}
+      keycloak: {condition: service_started}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+    networks: [backend]
+volumes:
+  postgres_data:
+networks:
+  backend:
+    driver: bridge
