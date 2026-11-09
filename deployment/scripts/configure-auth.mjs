@@ -23,7 +23,7 @@ async function api(route,options={}){
 const clients=await api('/clients?clientId=hackspacelabs-web');
 if(clients.length!==1)throw new Error('Expected one HackSpaceLabs website client');
 const client=clients[0];
-await api('/clients/'+encodeURIComponent(client.id),{method:'PUT',body:JSON.stringify({...client,rootUrl:app,baseUrl:app+'/',redirectUris:[app+'/api/auth/callback'],webOrigins:[app],attributes:{...client.attributes,'post.logout.redirect.uris':app+'/login'}})});
+await api('/clients/'+encodeURIComponent(client.id),{method:'PUT',body:JSON.stringify({rootUrl:app,baseUrl:app+'/',redirectUris:[app+'/api/auth/callback'],webOrigins:[app],attributes:{...client.attributes,'post.logout.redirect.uris':app+'/login'}})});
 const realm=await api('');
 await api('',{method:'PUT',body:JSON.stringify({attributes:{...realm.attributes,frontendUrl:auth}})});
 const updated=await api('/clients/'+encodeURIComponent(client.id));
