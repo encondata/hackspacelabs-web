@@ -2,6 +2,8 @@
 
 Company homepage, sample customer portal and administration dashboard, with real self-hosted authentication through Keycloak, PostgreSQL, and an Express OIDC gateway. Authentication uses authorization code + PKCE; customer environments, devices, tickets, search, and notifications remain **sample data**.
 
+The portal also hosts **[Slipway](apps/slipway/README.md)**, a live app that deploys GitHub repositories to your own Docker hosts over SSH. People with a Slipway role (assigned under **Identity & access**) see it under **Apps → Slipway**. Its API runs as an internal service behind the gateway at `/api/slipway` and trusts only HackSpaceLabs sign-in.
+
 ## Install or update
 
 Requires Linux, Bash, Git, OpenSSL, Docker Engine, and Docker Compose v2+. Your existing reverse proxy provides HTTPS.
@@ -17,6 +19,7 @@ Inspect the script before running it. It prompts for the install directory (defa
 | --- | --- | --- |
 | Website | `0.0.0.0:8088` | `hackspacelabs.com` |
 | Keycloak | `0.0.0.0:8089` | `auth.hackspacelabs.com` |
+| Slipway API | internal only | served by the website at `/api/slipway` |
 
 Route each hostname at `/` to its upstream port. Setup and local listener health do not require DNS, certificates, or proxy routes. The homepage is accessible over the HTTP web port immediately; authentication discovers its public issuer only when login is requested and retries after discovery failures. Keep backend ports reachable only by your trusted proxy/LAN. All user traffic uses HTTPS through your proxy. No GitHub credentials are required for installation.
 
@@ -45,9 +48,11 @@ The authentication protocol and PostgreSQL session tests passed during developme
 ```sh
 npm ci
 npm ci --prefix selfhost
+npx tsc --noEmit -p .
 npm run build
 npm test
 python3 deployment/tests/test_installer.py
+(cd apps/slipway && python3 -m venv .venv && .venv/bin/pip install -e '.[dev]' && .venv/bin/pytest -q)
 ```
 
 Authentication tests use a local signed test issuer. They do not substitute for Keycloak staging tests. Real PostgreSQL integration tests and their dedicated test-database requirements are documented in the deployment guide.

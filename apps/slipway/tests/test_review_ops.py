@@ -291,11 +291,12 @@ def test_database_password_applies_to_the_default_url(monkeypatch):
     assert make_url(settings.database_url).password == "p@ss/word"
 
 
-def test_compose_passes_postgres_password_outside_the_url():
-    compose = (ROOT / "docker-compose.yml").read_text()
+def test_compose_passes_the_database_password_outside_the_url():
+    # Slipway runs in the HackSpaceLabs stack (deployment/compose.yaml at the repository root).
+    compose = (ROOT.parent.parent / "deployment" / "compose.yaml").read_text()
     url_line = next(line for line in compose.splitlines() if "SLIPWAY_DATABASE_URL:" in line)
-    assert "POSTGRES_PASSWORD" not in url_line
-    assert "SLIPWAY_DATABASE_PASSWORD: ${POSTGRES_PASSWORD" in compose
+    assert "PASSWORD" not in url_line and "@postgres:5432/hsl_slipway" in url_line
+    assert "SLIPWAY_DATABASE_PASSWORD: ${SLIPWAY_DB_PASSWORD" in compose
 
 
 def test_generate_secrets_prints_url_safe_postgres_password(capsys):
