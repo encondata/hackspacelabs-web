@@ -88,6 +88,10 @@ const slipwayService=await api('/clients/'+slipway.id+'/service-account-user');
 const [realmAdmin]=await api('/clients?clientId=realm-management');
 const readOnly=await Promise.all(['view-users','query-clients'].map(name=>api('/clients/'+realmAdmin.id+'/roles/'+name)));
 await api('/users/'+slipwayService.id+'/role-mappings/clients/'+realmAdmin.id,{method:'POST',body:JSON.stringify(readOnly)});
+// Its tokens must be addressed to the admin API (kc-admin-api) and, as fullScopeAllowed is false, carry these two
+// read-only roles through an explicit scope mapping; otherwise Keycloak rejects them with 401.
+await api('/clients/'+slipway.id+'/default-client-scopes/'+adminScope.id,{method:'PUT'});
+await api('/clients/'+slipway.id+'/scope-mappings/clients/'+realmAdmin.id,{method:'POST',body:JSON.stringify(readOnly)});
 const slipwayRoleList=await Promise.all(Object.keys(slipwayRoles).map(name=>api('/clients/'+slipway.id+'/roles/'+name)));
 // The website client has fullScopeAllowed=false, so it may only carry Slipway roles it is scoped to.
 await api('/clients/'+client.id+'/scope-mappings/clients/'+slipway.id,{method:'POST',body:JSON.stringify(slipwayRoleList)});
