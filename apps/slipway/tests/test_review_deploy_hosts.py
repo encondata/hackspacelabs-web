@@ -214,7 +214,7 @@ async def test_check_does_not_hold_a_db_connection_during_ssh(admin_client, monk
     assert r.status_code == 200 and r.json()["status"] == "healthy"
     assert held == [0]
     events = (await admin_client.get("/api/v1/audit?action=host.key_pinned")).json()
-    assert len(events) == 1 and events[0]["actor"] == "admin@example.com"
+    assert len(events) == 1 and events[0]["actor"] == "admin"
 
 
 async def test_check_result_is_discarded_if_host_is_moved_during_probe(admin_client, monkeypatch):

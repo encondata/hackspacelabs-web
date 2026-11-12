@@ -3,6 +3,9 @@
 Permissions are ``resource:action`` strings. Roles hold a list of permissions and users
 hold any number of roles; a user's effective permissions are the union. ``*`` grants
 everything and ``resource:*`` grants every action on one resource.
+
+The roles are fixed. Which ones a person holds is decided in Keycloak (client ``slipway`` in the
+HackSpaceLabs realm) and arrives in the ``slipway_roles`` claim of their access token.
 """
 
 from __future__ import annotations
@@ -14,7 +17,6 @@ class Perm(StrEnum):
     USERS_READ = "users:read"
     USERS_WRITE = "users:write"
     ROLES_READ = "roles:read"
-    ROLES_WRITE = "roles:write"
     HOSTS_READ = "hosts:read"
     HOSTS_WRITE = "hosts:write"
     REPOS_READ = "repos:read"
@@ -32,9 +34,8 @@ class Perm(StrEnum):
 
 PERMISSION_DESCRIPTIONS: dict[str, str] = {
     Perm.USERS_READ: "View user accounts",
-    Perm.USERS_WRITE: "Create, edit, deactivate users and assign roles",
+    Perm.USERS_WRITE: "Unlink users' GitHub accounts and revoke their API tokens",
     Perm.ROLES_READ: "View roles and their permissions",
-    Perm.ROLES_WRITE: "Create, edit and delete custom roles",
     Perm.HOSTS_READ: "View Docker hosts and their health",
     Perm.HOSTS_WRITE: "Add, edit, remove hosts and manage SSH credentials (privileged)",
     Perm.REPOS_READ: "View GitHub repositories known to Slipway",
@@ -69,11 +70,11 @@ _READ_ALL = [
 
 SYSTEM_ROLES: dict[str, dict[str, object]] = {
     "admin": {
-        "description": "Full access to everything, including users, roles and hosts.",
+        "description": "Full access to everything, including other users' API tokens and GitHub links.",
         "permissions": ["*"],
     },
     "maintainer": {
-        "description": "Manages hosts, instances and deployments. Cannot manage users or roles.",
+        "description": "Manages hosts, instances and deployments. Cannot manage other users.",
         "permissions": [
             *_READ_ALL,
             Perm.HOSTS_WRITE,

@@ -7,18 +7,16 @@ import hashlib
 import logging
 import os
 from functools import lru_cache
-from typing import Annotated, Literal
+from typing import Literal
 
 from cryptography.fernet import Fernet
-from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic import field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
 log = logging.getLogger(__name__)
 
 DEV_SECRET = "dev-insecure-secret-change-me"
-
-CommaList = Annotated[list[str], NoDecode]
 
 
 class Settings(BaseSettings):
@@ -33,7 +31,12 @@ class Settings(BaseSettings):
     )
 
     env: Literal["development", "production", "test"] = "development"
-    base_url: str = "http://localhost:8000"
+    # Public origin of the HackSpaceLabs portal that fronts Slipway (scheme and host).
+    base_url: str = "http://localhost:3000"
+    # Path at which the portal gateway exposes this API (``/api/v1`` here). Used to build the GitHub callback URL.
+    api_public_path: str = "/api/slipway"
+    # Portal page the browser returns to after connecting GitHub.
+    portal_return_path: str = "/portal"
     log_level: str = "INFO"
     # Proxies trusted to set X-Forwarded-For/-Proto (comma-separated IPs or CIDRs, passed to uvicorn).
     forwarded_allow_ips: str = "127.0.0.1"
@@ -49,20 +52,27 @@ class Settings(BaseSettings):
     database_password: str | None = None
     database_echo: bool = False
 
-    session_ttl_hours: int = 24 * 14
-    allow_signup: bool = False
-    default_role: str = "viewer"
-
-    # Optional first-run admin. Created on startup only when the users table is empty.
-    admin_email: str | None = None
-    admin_password: str | None = None
+    # Identity: Keycloak (HackSpaceLabs realm). The gateway forwards the signed-in user's access token, which
+    # Slipway verifies itself: signature (JWKS), issuer, audience, authorized party and token type.
+    # oidc_issuer is the public issuer URL, exactly as it appears in the tokens' "iss" claim.
+    oidc_issuer: str = ""
+    # Where Slipway itself reaches the realm (JWKS, service-account token, admin API); defaults to oidc_issuer.
+    # In the compose stack this is the internal http://keycloak:8080/realms/hackspacelabs.
+    oidc_internal_url: str = ""
+    oidc_audience: str = "slipway"
+    # The client the gateway signs in with; tokens issued to any other client are refused.
+    oidc_authorized_party: str = "hackspacelabs-web"
+    oidc_roles_claim: str = "slipway_roles"
+    # Confidential "slipway" client with a view-users service account. Slipway uses it to confirm that an API
+    # token's owner is still enabled in Keycloak, and to read their current Slipway roles.
+    oidc_client_id: str = "slipway"
+    oidc_client_secret: str | None = None
+    # How long a Keycloak lookup for an API-token owner is trusted before asking again.
+    oidc_owner_cache_seconds: int = 60
 
     github_client_id: str | None = None
     github_client_secret: str | None = None
     github_scopes: str = "read:user user:email repo"
-    # GitHub logins / orgs allowed to create a Slipway account on first sign-in.
-    github_allowed_users: CommaList = Field(default_factory=list)
-    github_allowed_orgs: CommaList = Field(default_factory=list)
     # Optional machine token (PAT or GitHub App installation token) used for deploys
     # when the user triggering the deploy has not linked GitHub.
     github_service_token: str | None = None
@@ -73,14 +83,7 @@ class Settings(BaseSettings):
     default_deploy_root: str = "/opt/slipway"
     ssh_connect_timeout: int = 15
 
-    @field_validator("github_allowed_users", "github_allowed_orgs", mode="before")
-    @classmethod
-    def _split_commas(cls, value: object) -> object:
-        if isinstance(value, str):
-            return [v.strip().lower() for v in value.split(",") if v.strip()]
-        return value
-
-    @field_validator("base_url")
+    @field_validator("base_url", "oidc_issuer", "oidc_internal_url", "api_public_path")
     @classmethod
     def _strip_slash(cls, value: str) -> str:
         return value.rstrip("/")
@@ -103,6 +106,10 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "SLIPWAY_ENCRYPTION_KEY must be set in production (run `slipway generate-secrets`)"
                 )
+            if not self.oidc_issuer:
+                raise ValueError("SLIPWAY_OIDC_ISSUER must be set in production")
+            if not self.oidc_client_secret:
+                raise ValueError("SLIPWAY_OIDC_CLIENT_SECRET must be set in production")
         return self
 
     @model_validator(mode="after")
@@ -137,8 +144,25 @@ class Settings(BaseSettings):
         return self.env == "production"
 
     @property
-    def secure_cookies(self) -> bool:
-        return self.base_url.startswith("https://")
+    def realm_url(self) -> str:
+        """The realm as Slipway reaches it (internal URL when set)."""
+        return self.oidc_internal_url or self.oidc_issuer
+
+    @property
+    def jwks_url(self) -> str:
+        return f"{self.realm_url}/protocol/openid-connect/certs"
+
+    @property
+    def oidc_token_url(self) -> str:
+        return f"{self.realm_url}/protocol/openid-connect/token"
+
+    @property
+    def oidc_admin_url(self) -> str:
+        """Admin REST API base for the realm: .../realms/<name> -> .../admin/realms/<name>."""
+        base, sep, realm = self.realm_url.rpartition("/realms/")
+        if not sep:
+            raise ValueError("The OIDC issuer must look like https://host/realms/<realm>")
+        return f"{base}/admin/realms/{realm}"
 
     @property
     def github_enabled(self) -> bool:
@@ -146,14 +170,11 @@ class Settings(BaseSettings):
 
     @property
     def github_callback_url(self) -> str:
-        return f"{self.base_url}/auth/github/callback"
+        return f"{self.base_url}{self.api_public_path}/auth/github/callback"
 
     @property
     def oauth_scopes(self) -> str:
-        scopes = self.github_scopes.split()
-        if self.github_allowed_orgs and "read:org" not in scopes:
-            scopes.append("read:org")
-        return " ".join(scopes)
+        return " ".join(self.github_scopes.split())
 
     def fernet_keys(self) -> list[bytes]:
         if self.encryption_key:

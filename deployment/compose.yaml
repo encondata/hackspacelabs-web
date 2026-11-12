@@ -59,6 +59,7 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?Required}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Required}
       DATABASE_URL: postgres://hsl_web:${APP_DB_PASSWORD:?Required}@postgres:5432/hsl_sessions
+      SLIPWAY_URL: http://slipway:8000
     depends_on:
       postgres: {condition: service_healthy}
       keycloak: {condition: service_started}
@@ -70,8 +71,8 @@ services:
       start_period: 120s
     networks: [backend]
   slipway:
-    # Deployment orchestration API (apps/slipway). Internal only: no published port. The web gateway will
-    # proxy it at /api/slipway and the portal renders its UI.
+    # Deployment orchestration API (apps/slipway). Internal only: no published port. The web gateway proxies it at
+    # /api/slipway, attaching the signed-in user's Keycloak access token, which Slipway verifies itself.
     build:
       context: ../apps/slipway
     image: hackspacelabs-slipway
@@ -84,6 +85,16 @@ services:
       SLIPWAY_ENCRYPTION_KEY: ${SLIPWAY_ENCRYPTION_KEY:?Required}
       SLIPWAY_DATABASE_URL: postgresql+asyncpg://hsl_slipway@postgres:5432/hsl_slipway
       SLIPWAY_DATABASE_PASSWORD: ${SLIPWAY_DB_PASSWORD:?Required}
+      SLIPWAY_OIDC_ISSUER: ${AUTH_ORIGIN:-https://${AUTH_HOST:-auth.hackspacelabs.com}}/realms/hackspacelabs
+      SLIPWAY_OIDC_INTERNAL_URL: http://keycloak:8080/realms/hackspacelabs
+      SLIPWAY_OIDC_CLIENT_SECRET: ${SLIPWAY_OIDC_CLIENT_SECRET:?Required}
+      # Optional GitHub OAuth app for "Connect GitHub". Callback: <APP_ORIGIN>/api/slipway/auth/github/callback
+      SLIPWAY_GITHUB_CLIENT_ID: ${SLIPWAY_GITHUB_CLIENT_ID:-}
+      SLIPWAY_GITHUB_CLIENT_SECRET: ${SLIPWAY_GITHUB_CLIENT_SECRET:-}
+      SLIPWAY_GITHUB_SERVICE_TOKEN: ${SLIPWAY_GITHUB_SERVICE_TOKEN:-}
+      # Only the gateway and other containers on the private backend network can reach Slipway; it records the
+      # client address the gateway forwards (audit log only).
+      SLIPWAY_FORWARDED_ALLOW_IPS: '*'
     depends_on:
       postgres: {condition: service_healthy}
     networks: [backend]
@@ -99,6 +110,7 @@ services:
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?Required}
       ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN:-bootstrap-admin}
       ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_PASSWORD:?Required}
+      SLIPWAY_OIDC_CLIENT_SECRET: ${SLIPWAY_OIDC_CLIENT_SECRET:?Required}
     networks: [backend]
 volumes:
   postgres_data:

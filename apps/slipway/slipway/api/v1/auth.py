@@ -1,163 +1,133 @@
-"""Email/password login, logout, self-registration and the current user's profile."""
+"""The signed-in user, and connecting GitHub for repository access.
+
+Signing in happens in the HackSpaceLabs portal (Keycloak); there are no Slipway passwords or sessions. GitHub is
+not a way to sign in: it is linked so Slipway can sync a person's repositories and deploy with their access.
+
+Connecting GitHub (through the gateway, so the browser stays on the portal's origin):
+
+1. ``POST /auth/github/link`` returns GitHub's authorize URL. Its ``state`` is signed with ``SLIPWAY_SECRET_KEY``,
+   bound to the Slipway user who asked, and expires after 10 minutes.
+2. GitHub redirects the browser to ``<portal>/api/slipway/auth/github/callback``. The gateway attaches that
+   person's access token, so the callback knows who is completing the link and refuses a state minted for
+   anyone else (a link planted from another account, or a replayed authorization).
+3. The callback redirects back to the portal with ``?github=linked`` or ``?github_error=<code>``.
+"""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+import hashlib
+import hmac
+import logging
+import secrets
+import time
+from urllib.parse import urlencode
 
-from slipway.api.deps import DB, Auth
-from slipway.core import ratelimit
+from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
+
+from slipway.api.deps import DB, Auth, Interactive
 from slipway.core.config import get_settings
-from slipway.core.ratelimit import (
-    LOGIN_PAIR_V6_PREFIX,
-    ip_bucket,
-    login_email_limiter,
-    login_ip_limiter,
-    login_pair_limiter,
-    password_change_limiter,
-    password_change_user_limiter,
-    register_limiter,
-)
-from slipway.core.security import hash_password_async, verify_password_async
-from slipway.models import UserSession
-from slipway.schemas import LoginIn, PasswordChange, ProfileUpdate, RegisterIn, SessionOut, UserOut
+from slipway.core.security import safe_equals
+from slipway.models import OAuthAccount
+from slipway.schemas import GitHubLinkStart, UserOut
 from slipway.services import audit
-from slipway.services.audit import client_ip
-from slipway.services.auth import (
-    AuthContext,
-    authenticate_password,
-    clear_session_cookie,
-    create_session,
-    revoke_user_sessions,
-    set_session_cookie,
-    sign_in_again,
-    signed_in_recently,
-)
-from slipway.services.users import FIRST_ADMIN_RESERVED, UserError, check_password_strength, create_user, user_count
+from slipway.services.github import GitHubClient, GitHubError, authorize_url, exchange_code
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-TOO_MANY = "Too many attempts; try again in a few minutes"
+STATE_TTL_SECONDS = 600
 
 
-def _require_session(ctx: AuthContext) -> UserSession:
-    """Credential changes need a browser session, never an API token."""
-    if ctx.via != "session" or ctx.session is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "This can only be done from the web UI")
-    return ctx.session
+def _sign(user_id: str, nonce: str, expires: str) -> str:
+    message = "|".join(("slipway-github-link", user_id, nonce, expires)).encode()
+    return hmac.new(get_settings().secret_key.encode(), message, hashlib.sha256).hexdigest()
 
 
-@router.post("/login")
-async def login(body: LoginIn, request: Request, response: Response, db: DB) -> SessionOut:
-    email = body.email.strip().lower()
-    addr = client_ip(request)
-    ip = ip_bucket(addr)
-    pair = f"{ip_bucket(addr, LOGIN_PAIR_V6_PREFIX)}|{email}"
-    # Count the attempt before any await, so a burst of parallel guesses is limited too.
-    if not ratelimit.acquire((login_ip_limiter, ip), (login_pair_limiter, pair), (login_email_limiter, email)):
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, TOO_MANY)
-    user = await authenticate_password(db, email, body.password)
-    if user is None:
-        audit.record(db, "auth.login_failed", summary=f"Failed login for {body.email[:100]}", request=request)
-        await db.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
-    # Only failures count against the limits.
-    login_pair_limiter.reset(pair)
-    login_ip_limiter.undo(ip)
-    login_email_limiter.undo(email)
-    raw, session = await create_session(db, user, request)
-    audit.record(db, "auth.login", actor=user, target=user, summary="Signed in with password", request=request)
-    await db.commit()
-    set_session_cookie(response, raw, request)
-    return SessionOut(user=UserOut.of(user), csrf_token=session.csrf_token)
+def make_state(user_id: str, *, now: float | None = None) -> str:
+    nonce = secrets.token_urlsafe(18)
+    expires = str(int((now if now is not None else time.time()) + STATE_TTL_SECONDS))
+    return f"{nonce}.{expires}.{_sign(user_id, nonce, expires)}"
 
 
-@router.post("/logout", status_code=204)
-async def logout(ctx: Auth, response: Response, db: DB) -> None:
-    if ctx.session is not None:
-        await db.delete(ctx.session)
-        await db.commit()
-    clear_session_cookie(response)
+def state_valid(state: str, user_id: str, *, now: float | None = None) -> bool:
+    parts = state.split(".") if state.isascii() else []
+    if len(parts) != 3 or not parts[1].isdigit():
+        return False
+    nonce, expires, signature = parts
+    if int(expires) < (now if now is not None else time.time()):
+        return False
+    return safe_equals(signature, _sign(user_id, nonce, expires))
 
 
-@router.post("/register", status_code=201)
-async def register(body: RegisterIn, request: Request, response: Response, db: DB) -> SessionOut:
-    settings = get_settings()
-    if not settings.allow_signup:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Self-registration is disabled; ask an admin for an account")
-    if not register_limiter.acquire(ip_bucket(client_ip(request))):
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, TOO_MANY)
-    if settings.admin_email:
-        # SLIPWAY_ADMIN_EMAIL reserves the first (admin) account for the configured admin.
-        if await user_count(db) == 0:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, FIRST_ADMIN_RESERVED)
-        await db.commit()  # hand the pooled connection back before create_user queues for argon2
-    try:
-        user = await create_user(
-            db, email=body.email, password=body.password, full_name=body.full_name,
-            allow_first_admin=not settings.admin_email,
-        )
-    except UserError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    raw, session = await create_session(db, user, request)
-    audit.record(db, "user.register", actor=user, target=user, summary=f"Registered {user.email}", request=request)
-    await db.commit()
-    set_session_cookie(response, raw, request)
-    return SessionOut(user=UserOut.of(user), csrf_token=session.csrf_token)
+def _back(**params: str) -> RedirectResponse:
+    # A relative URL on the portal's origin: the gateway serves this API on the same host.
+    return RedirectResponse(f"{get_settings().portal_return_path}?{urlencode(params)}", status_code=302)
 
 
 @router.get("/me")
-async def me(ctx: Auth) -> SessionOut:
-    return SessionOut(user=UserOut.of(ctx.user), csrf_token=ctx.csrf_token)
-
-
-@router.patch("/me")
-async def update_me(body: ProfileUpdate, ctx: Auth, db: DB) -> UserOut:
-    ctx.user.full_name = body.full_name.strip()
-    await db.commit()
+async def me(ctx: Auth) -> UserOut:
     return UserOut.of(ctx.user)
 
 
-@router.post("/me/password", status_code=204)
-async def change_password(body: PasswordChange, ctx: Auth, request: Request, db: DB) -> None:
-    session = _require_session(ctx)
+@router.post("/github/link")
+async def start_github_link(ctx: Interactive) -> GitHubLinkStart:
+    if not get_settings().github_enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "GitHub is not configured for Slipway")
+    return GitHubLinkStart(authorize_url=authorize_url(make_state(str(ctx.user.id))))
+
+
+@router.get("/github/callback", include_in_schema=False)
+async def github_callback(
+    ctx: Interactive, request: Request, db: DB, code: str = "", state: str = "", error: str = ""
+) -> RedirectResponse:
+    if error:
+        if error != "access_denied":
+            log.warning("GitHub OAuth returned error %r", error[:100])
+        return _back(github_error="cancelled" if error == "access_denied" else "failed")
+    if not code or not state_valid(state, str(ctx.user.id)):
+        return _back(github_error="state")
     user = ctx.user
     try:
-        check_password_strength(body.new_password)
-    except UserError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    # Nothing is pending yet: hand the pooled connection back before queuing for argon2.
+        token, scopes = await exchange_code(code)
+        async with GitHubClient(token) as gh:
+            profile = await gh.get_user()
+    except GitHubError as exc:
+        log.warning("GitHub OAuth failed: %s", exc)
+        return _back(github_error="failed")
+    gh_id, login = str(profile["id"]), str(profile["login"])[:100]
+    account = await db.scalar(
+        select(OAuthAccount)
+        .options(joinedload(OAuthAccount.user))
+        .where(OAuthAccount.provider == "github", OAuthAccount.provider_user_id == gh_id)
+    )
+    if account is not None and account.user_id != user.id:
+        return _back(github_error="already_linked")
+    if account is None:
+        # Connecting a different GitHub account replaces the previous link.
+        if (previous := user.github) is not None:
+            user.oauth_accounts.remove(previous)
+            await db.flush()
+        account = OAuthAccount(provider="github", provider_user_id=gh_id, login=login)
+        user.oauth_accounts.append(account)
+    account.login = login
+    account.access_token = token
+    account.scopes = scopes[:500]
+    avatar = profile.get("avatar_url")
+    if isinstance(avatar, str) and len(avatar) <= 500:
+        user.avatar_url = avatar
+    audit.record(db, "auth.github_linked", actor=user, target=user, summary=f"Linked @{login}", request=request)
     await db.commit()
-    if user.password_hash:
-        attempt = ((password_change_limiter, f"{user.id}:{session.id}"), (password_change_user_limiter, str(user.id)))
-        if not ratelimit.acquire(*attempt):
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, TOO_MANY)
-        if not await verify_password_async(body.current_password or "", user.password_hash):
-            audit.record(
-                db, "auth.password_change_failed", actor=user, target=user, summary="Wrong current password", request=request
-            )
-            await db.commit()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect")
-        for limiter, key in attempt:
-            limiter.reset(key)
-    elif not signed_in_recently(session):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, sign_in_again("set your password"))
-    user.password_hash = await hash_password_async(body.new_password)
-    await revoke_user_sessions(db, user, keep=session)
-    audit.record(db, "auth.password_changed", actor=user, target=user, request=request)
-    await db.commit()
+    return _back(github="linked")
 
 
 @router.delete("/me/github", status_code=204)
-async def unlink_github(ctx: Auth, request: Request, db: DB) -> None:
-    session = _require_session(ctx)
+async def unlink_github(ctx: Interactive, request: Request, db: DB) -> None:
     account = ctx.user.github
     if account is None:
         return
-    if ctx.user.password_hash is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Set a password before unlinking GitHub, or you'll be locked out")
-    # A stolen session must not swap the owner's GitHub link for the thief's (unlink, then link another).
-    if not signed_in_recently(session):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, sign_in_again("unlink GitHub"))
     ctx.user.oauth_accounts.remove(account)
     audit.record(db, "auth.github_unlinked", actor=ctx.user, target=ctx.user, summary=f"Unlinked @{account.login}", request=request)
     await db.commit()

@@ -71,3 +71,50 @@ const [realmManagement]=await api('/clients?clientId=realm-management');
 const role=await api('/clients/'+realmManagement.id+'/roles/realm-admin');
 await api('/users/'+service.id+'/role-mappings/clients/'+realmManagement.id,{method:'POST',body:JSON.stringify([role])});
 console.log('Portal identity management configured.');
+
+// Slipway deployment API: a bearer-only client that holds the Slipway roles. Access tokens issued to the website
+// client carry audience "slipway" and a slipway_roles claim; the gateway forwards them to Slipway, which verifies them.
+const slipwayRoles={admin:"Slipway: full control, including users' tokens and audit",maintainer:'Slipway: manage hosts, instances and deployments',developer:'Slipway: sync repositories, operate instances and deploy',viewer:'Slipway: read-only access'};
+const slipwaySecret=process.env.SLIPWAY_OIDC_CLIENT_SECRET;
+if(!slipwaySecret||slipwaySecret.length<32)throw new Error('SLIPWAY_OIDC_CLIENT_SECRET is required');
+// Confidential, no browser flows. Its read-only service account lets Slipway confirm an API token's owner is still enabled.
+const slipwayRepresentation={clientId:'slipway',name:'Slipway',protocol:'openid-connect',enabled:true,bearerOnly:false,publicClient:false,clientAuthenticatorType:'client-secret',secret:slipwaySecret,standardFlowEnabled:false,directAccessGrantsEnabled:false,implicitFlowEnabled:false,serviceAccountsEnabled:true,fullScopeAllowed:false};
+let [slipway]=await api('/clients?clientId=slipway');
+if(!slipway){await api('/clients',{method:'POST',body:JSON.stringify(slipwayRepresentation)});[slipway]=await api('/clients?clientId=slipway')}
+else await api('/clients/'+slipway.id,{method:'PUT',body:JSON.stringify({...slipway,...slipwayRepresentation})});
+const presentRoles=new Set((await api('/clients/'+slipway.id+'/roles')).map(role=>role.name));
+for(const [name,description] of Object.entries(slipwayRoles))if(!presentRoles.has(name))await api('/clients/'+slipway.id+'/roles',{method:'POST',body:JSON.stringify({name,description})});
+const slipwayService=await api('/clients/'+slipway.id+'/service-account-user');
+const [realmAdmin]=await api('/clients?clientId=realm-management');
+const readOnly=await Promise.all(['view-users','query-clients'].map(name=>api('/clients/'+realmAdmin.id+'/roles/'+name)));
+await api('/users/'+slipwayService.id+'/role-mappings/clients/'+realmAdmin.id,{method:'POST',body:JSON.stringify(readOnly)});
+const slipwayRoleList=await Promise.all(Object.keys(slipwayRoles).map(name=>api('/clients/'+slipway.id+'/roles/'+name)));
+// The website client has fullScopeAllowed=false, so it may only carry Slipway roles it is scoped to.
+await api('/clients/'+client.id+'/scope-mappings/clients/'+slipway.id,{method:'POST',body:JSON.stringify(slipwayRoleList)});
+// "basic" puts sub and auth_time into access tokens (Keycloak 25+); Slipway keys accounts by sub.
+const basicScope=(await api('/client-scopes')).find(scope=>scope.name==='basic');
+if(basicScope)await api('/clients/'+client.id+'/default-client-scopes/'+basicScope.id,{method:'PUT'});
+const wantedMappers=[
+  {name:'Slipway audience',protocol:'openid-connect',protocolMapper:'oidc-audience-mapper',consentRequired:false,config:{'included.client.audience':'slipway','id.token.claim':'false','access.token.claim':'true','introspection.token.claim':'true'}},
+  {name:'Slipway roles',protocol:'openid-connect',protocolMapper:'oidc-usermodel-client-role-mapper',consentRequired:false,config:{'usermodel.clientRoleMapping.clientId':'slipway','claim.name':'slipway_roles','jsonType.label':'String',multivalued:'true','id.token.claim':'true','access.token.claim':'true','userinfo.token.claim':'true'}}
+];
+const presentMappers=await api('/clients/'+client.id+'/protocol-mappers/models');
+for(const mapper of wantedMappers){
+  const present=presentMappers.find(m=>m.name===mapper.name);
+  if(present)await api('/clients/'+client.id+'/protocol-mappers/models/'+present.id,{method:'PUT',body:JSON.stringify({...mapper,id:present.id})});
+  else await api('/clients/'+client.id+'/protocol-mappers/models',{method:'POST',body:JSON.stringify(mapper)});
+}
+// First rollout only: while nobody holds any Slipway role, portal admins become Slipway admins so someone can use it.
+// Once any Slipway role is assigned, roles are only ever changed by administrators.
+let slipwayAssigned=false;
+for(const name of Object.keys(slipwayRoles)){if((await api('/clients/'+slipway.id+'/roles/'+name+'/users?first=0&max=1')).length){slipwayAssigned=true;break}}
+let promoted=0;
+if(!slipwayAssigned){
+  const slipwayAdmin=slipwayRoleList.find(role=>role.name==='admin');
+  for(let first=0;;first+=100){
+    const admins=await api('/clients/'+client.id+'/roles/admin/users?first='+first+'&max=100');
+    for(const user of admins){await api('/users/'+user.id+'/role-mappings/clients/'+slipway.id,{method:'POST',body:JSON.stringify([slipwayAdmin])});promoted++}
+    if(admins.length<100)break;
+  }
+}
+console.log('Slipway access configured'+(promoted?'; granted the Slipway admin role to '+promoted+' portal administrator(s).':'.'));

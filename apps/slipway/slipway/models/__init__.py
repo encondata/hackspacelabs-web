@@ -4,9 +4,10 @@ from slipway.models.audit import AuditEvent
 from slipway.models.host import Host, HostAuthMethod, HostStatus
 from slipway.models.instance import BuildSource, Deployment, DeploymentStatus, Instance, InstanceStatus
 from slipway.models.repository import Repository
-from slipway.models.user import ApiToken, OAuthAccount, Role, User, UserSession, user_roles
+from slipway.models.user import KEYCLOAK, ApiToken, OAuthAccount, Role, User, user_roles
 
 __all__ = [
+    "KEYCLOAK",
     "ApiToken",
     "AuditEvent",
     "BuildSource",
@@ -21,6 +22,5 @@ __all__ = [
     "Repository",
     "Role",
     "User",
-    "UserSession",
     "user_roles",
 ]

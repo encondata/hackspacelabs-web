@@ -82,9 +82,10 @@ fi
         values=dict(x.split('=',1) for x in envfile.read_text().splitlines() if '=' in x)
         self.assertEqual(len(values['SLIPWAY_DB_PASSWORD']),96)
         self.assertEqual(len(values['SLIPWAY_SECRET_KEY']),96)
+        self.assertEqual(len(values['SLIPWAY_OIDC_CLIENT_SECRET']),96)
         key=values['SLIPWAY_ENCRYPTION_KEY']
         self.assertRegex(key,r'^[A-Za-z0-9_-]{43}=$')
-        for secret in (values['SLIPWAY_DB_PASSWORD'],key):
+        for secret in (values['SLIPWAY_DB_PASSWORD'],values['SLIPWAY_OIDC_CLIENT_SECRET'],key):
             self.assertNotIn(secret,result.stdout+result.stderr)
         for line in legacy:
             self.assertIn(line,envfile.read_text())

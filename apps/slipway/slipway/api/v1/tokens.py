@@ -5,10 +5,10 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Request
 from sqlalchemy import select
 
-from slipway.api.deps import DB, Auth, not_found
+from slipway.api.deps import DB, Auth, Interactive, not_found
 from slipway.core.security import API_TOKEN_PREFIX, hash_token, new_api_token
 from slipway.db.base import utcnow
 from slipway.models import ApiToken
@@ -27,9 +27,7 @@ async def list_tokens(ctx: Auth, db: DB) -> list[TokenOut]:
 
 
 @router.post("", status_code=201)
-async def create_token(body: TokenCreate, ctx: Auth, request: Request, db: DB) -> TokenCreated:
-    if ctx.via != "session":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "API tokens can only be created from the web UI")
+async def create_token(body: TokenCreate, ctx: Interactive, request: Request, db: DB) -> TokenCreated:
     raw = new_api_token()
     token = ApiToken(
         user_id=ctx.user.id,

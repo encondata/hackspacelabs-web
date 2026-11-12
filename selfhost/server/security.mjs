@@ -1,10 +1,13 @@
 import {createCipheriv,createDecipheriv,randomBytes,timingSafeEqual} from 'node:crypto';
+// Roles of the Slipway client (deployment app). Holding any of them grants access to Slipway in the portal.
+export const SLIPWAY_ROLES=['admin','maintainer','developer','viewer'];
 export function safeDestination(value){return value==='/admin'||value==='/portal'||value==='/me'?value:null}
 export function identityFromClaims(claims){
  if(!claims||typeof claims.sub!=='string'||!claims.sub)throw new Error('Authenticated identity required');
  const roles=Array.isArray(claims.hsl_roles)?claims.hsl_roles.filter(r=>r==='admin'||r==='customer'):[];
  if(!roles.length)throw new Error('No application role');
- return {id:claims.sub,email:typeof claims.email==='string'?claims.email:'',name:typeof claims.name==='string'&&claims.name.trim()?claims.name:typeof claims.preferred_username==='string'?claims.preferred_username:'HackSpaceLabs user',roles:[...new Set(roles)]};
+ const slipway=Array.isArray(claims.slipway_roles)?[...new Set(claims.slipway_roles.filter(r=>SLIPWAY_ROLES.includes(r)))].sort():[];
+ return {id:claims.sub,email:typeof claims.email==='string'?claims.email:'',name:typeof claims.name==='string'&&claims.name.trim()?claims.name:typeof claims.preferred_username==='string'?claims.preferred_username:'HackSpaceLabs user',roles:[...new Set(roles)],apps:{slipway}};
 }
 export function canAccess(user,pathname){return pathname==='/admin'?user?.roles?.includes('admin'):(pathname==='/portal'||pathname==='/me')?user?.roles?.some(r=>r==='admin'||r==='customer'):false}
 export function equalSecret(a,b){if(typeof a!=='string'||typeof b!=='string')return false;const x=Buffer.from(a);const y=Buffer.from(b);return x.length===y.length&&timingSafeEqual(x,y)}
@@ -30,5 +33,7 @@ export function readConfig(env=process.env){
  if(!env.OIDC_CLIENT_SECRET||env.OIDC_CLIENT_SECRET.length<32)throw new Error('OIDC_CLIENT_SECRET must contain at least 32 characters');
  if(!env.DATABASE_URL)throw new Error('DATABASE_URL is required');
  tokenCipher(env.TOKEN_ENCRYPTION_KEY||'');
- return {production,secureCookies:production&&!lan,allowInsecureOidc:lan,origin:origin.origin,issuer:issuer.href.replace(/\/$/,''),clientId:env.OIDC_CLIENT_ID||'hackspacelabs-web',clientSecret:env.OIDC_CLIENT_SECRET,sessionSecret:env.SESSION_SECRET,encryptionKey:env.TOKEN_ENCRYPTION_KEY,databaseUrl:env.DATABASE_URL,port:Number(env.PORT||3000),host:production?'0.0.0.0':'127.0.0.1',idleMs:30*60*1000,absoluteMs:8*60*60*1000,refreshMs:60*1000};
+ let slipwayUrl=null;
+ if(env.SLIPWAY_URL){const u=new URL(env.SLIPWAY_URL);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash||u.pathname!=='/')throw new Error('SLIPWAY_URL must be an http(s) origin such as http://slipway:8000');slipwayUrl=u.origin}
+ return {production,secureCookies:production&&!lan,allowInsecureOidc:lan,origin:origin.origin,issuer:issuer.href.replace(/\/$/,''),clientId:env.OIDC_CLIENT_ID||'hackspacelabs-web',clientSecret:env.OIDC_CLIENT_SECRET,sessionSecret:env.SESSION_SECRET,encryptionKey:env.TOKEN_ENCRYPTION_KEY,databaseUrl:env.DATABASE_URL,slipwayUrl,port:Number(env.PORT||3000),host:production?'0.0.0.0':'127.0.0.1',idleMs:30*60*1000,absoluteMs:8*60*60*1000,refreshMs:60*1000};
 }

@@ -7,7 +7,6 @@ import io
 import logging
 import os
 import select as fd_select
-import signal
 import subprocess
 import sys
 import time
@@ -29,10 +28,9 @@ from slipway.core.config import Settings, get_settings
 from slipway.core.crypto import reset_crypto_cache
 from slipway.db.session import get_sessionmaker
 from slipway.main import check_encryption_key
-from slipway.models import AuditEvent, Host, Instance, OAuthAccount, Repository, User
+from slipway.models import Host, Instance, OAuthAccount, Repository, User
 from slipway.schemas import InstanceUpdate
-from slipway.services.users import UserError
-from tests.conftest import PASSWORD, login, make_user
+from tests.conftest import login, make_user
 
 ROOT = Path(__file__).resolve().parent.parent
 K1, K2, K3 = (Fernet.generate_key().decode() for _ in range(3))
@@ -82,42 +80,6 @@ def _client_behind(app, trusted: str, peer: str) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=transport, base_url="http://testserver")
 
 
-async def test_serve_ignores_forwarded_for_from_untrusted_clients(app, monkeypatch):
-    kwargs = _serve_kwargs(monkeypatch)
-    assert kwargs["proxy_headers"] is True and kwargs["forwarded_allow_ips"] == "127.0.0.1"
-
-    await make_user("admin@example.com")
-    attacker = _client_behind(app, kwargs["forwarded_allow_ips"], "203.0.113.7")
-    codes = []
-    for i in range(11):
-        r = await attacker.post(
-            "/api/v1/auth/login",
-            json={"email": "admin@example.com", "password": "wrong"},
-            headers={"X-Forwarded-For": f"10.66.{i}.1"},
-        )
-        codes.append(r.status_code)
-    assert codes[:10] == [401] * 10 and codes[10] == 429
-    async with get_sessionmaker()() as db:
-        ips = set((await db.scalars(select(AuditEvent.ip))).all())
-    assert ips == {"203.0.113.7"}
-
-
-async def test_serve_trusts_the_configured_proxy(app, monkeypatch, settings_env):
-    settings_env(FORWARDED_ALLOW_IPS="192.0.2.10")
-    kwargs = _serve_kwargs(monkeypatch)
-    assert kwargs["forwarded_allow_ips"] == "192.0.2.10"
-
-    via_proxy = _client_behind(app, kwargs["forwarded_allow_ips"], "192.0.2.10")
-    r = await via_proxy.post(
-        "/api/v1/auth/login",
-        json={"email": "ghost@example.com", "password": "wrong"},
-        headers={"X-Forwarded-For": "1.2.3.4, 198.51.100.9"},
-    )
-    assert r.status_code == 401
-    async with get_sessionmaker()() as db:
-        assert (await db.scalars(select(AuditEvent.ip))).all() == ["198.51.100.9"]
-
-
 # --------------------------------------------------------------------- create-admin
 
 
@@ -160,24 +122,6 @@ def _slipway(*argv: str, **kwargs) -> subprocess.Popen:
     )
 
 
-async def test_create_admin_reads_a_piped_password(client):
-    proc = _slipway("create-admin", "piped@example.com")
-    out, err = proc.communicate(f"{NEW_PASSWORD}\n".encode(), timeout=60)
-    assert proc.returncode == 0, err.decode()
-    assert out.decode().strip() == "Created admin piped@example.com."
-    data = await login(client, "piped@example.com", NEW_PASSWORD)
-    assert data["user"]["roles"] == ["admin"]
-
-
-async def test_create_admin_without_a_password_exits_cleanly():
-    proc = _slipway("create-admin", "nobody@example.com")
-    _, err = proc.communicate(b"", timeout=60)
-    assert proc.returncode == 1
-    assert "Error: No password given" in err.decode() and "Traceback" not in err.decode()
-    async with get_sessionmaker()() as db:
-        assert await db.scalar(select(User).where(User.email == "nobody@example.com")) is None
-
-
 def _read_until(stream, marker: bytes, timeout: float = 60) -> None:
     seen, deadline = b"", time.monotonic() + timeout
     while marker not in seen:
@@ -187,107 +131,11 @@ def _read_until(stream, marker: bytes, timeout: float = 60) -> None:
         seen += chunk
 
 
-async def test_create_admin_ctrl_c_at_the_prompt_stops_cleanly():
-    proc = _slipway("create-admin", "cancel@example.com")
-    try:
-        _read_until(proc.stderr, b"Password (10+ characters): ")
-        proc.send_signal(signal.SIGINT)
-        _, err = proc.communicate(timeout=30)
-    finally:
-        proc.kill()
-    assert proc.returncode == 1
-    assert "Cancelled; nothing was changed." in err.decode() and "Traceback" not in err.decode()
-    async with get_sessionmaker()() as db:
-        assert await db.scalar(select(User).where(User.email == "cancel@example.com")) is None
-
-
 async def _get_user(email: str) -> User:
     async with get_sessionmaker()() as db:
         user = await db.scalar(select(User).where(User.email == email))
         assert user is not None
         return user
-
-
-async def test_create_admin_for_existing_user_does_not_prompt_or_touch_password(client, monkeypatch):
-    await make_user("admin@example.com")
-    await make_user("ops@example.com", roles=["viewer"])
-    _prompts(monkeypatch, None)
-
-    lines = await _run_create_admin("ops@example.com")
-    assert "Granted the admin role." in lines
-    assert any("Password NOT changed" in line for line in lines)
-    data = await login(client, "ops@example.com")  # original password still works
-    assert "admin" in data["user"]["roles"]
-
-
-async def test_create_admin_refuses_password_for_existing_user_without_reset(client, monkeypatch):
-    await make_user("admin@example.com")
-    await make_user("ops@example.com", roles=["viewer"])
-    _prompts(monkeypatch, None)
-
-    with pytest.raises(UserError, match="--reset-password"):
-        await _run_create_admin("ops@example.com", "--password", NEW_PASSWORD)
-    user = await _get_user("ops@example.com")
-    assert user.role_names == ["viewer"]
-    r = await client.post("/api/v1/auth/login", json={"email": "ops@example.com", "password": NEW_PASSWORD})
-    assert r.status_code == 401
-
-
-async def test_create_admin_reset_password_cuts_off_sessions_and_tokens(make_client, monkeypatch):
-    await make_user("admin@example.com")
-    await make_user("ops@example.com", roles=["viewer"])
-    holder = make_client()
-    await login(holder, "ops@example.com")
-    token = (await holder.post("/api/v1/tokens", json={"name": "ci"})).json()["token"]
-    bot = make_client()
-    bot.headers["Authorization"] = f"Bearer {token}"
-    assert (await bot.get("/api/v1/auth/me")).status_code == 200
-    asked = _prompts(monkeypatch, NEW_PASSWORD)
-
-    lines = await _run_create_admin("ops@example.com", "--reset-password")
-    assert len(asked) == 2  # password + confirmation
-    assert any("signed out 1 session(s) and deleted 1 API token(s)" in line for line in lines)
-    assert (await holder.get("/api/v1/auth/me")).status_code == 401
-    assert (await bot.get("/api/v1/auth/me")).status_code == 401
-    fresh = make_client()
-    r = await fresh.post("/api/v1/auth/login", json={"email": "ops@example.com", "password": PASSWORD})
-    assert r.status_code == 401
-    data = await login(fresh, "ops@example.com", NEW_PASSWORD)
-    assert "admin" in data["user"]["roles"]
-
-
-async def test_create_admin_reset_password_checks_strength(monkeypatch):
-    await make_user("admin@example.com")
-    _prompts(monkeypatch, "short")
-    with pytest.raises(UserError, match="at least"):
-        await _run_create_admin("admin@example.com", "--reset-password")
-
-
-async def test_create_admin_activate_reactivates_account(client, monkeypatch):
-    await make_user("admin@example.com")
-    await make_user("ops@example.com", roles=["viewer"])
-    async with get_sessionmaker()() as db:
-        user = await db.scalar(select(User).where(User.email == "ops@example.com"))
-        user.is_active = False
-        await db.commit()
-    _prompts(monkeypatch, None)
-
-    lines = await _run_create_admin("ops@example.com")
-    assert any("still INACTIVE" in line for line in lines)
-    assert not (await _get_user("ops@example.com")).is_active
-
-    lines = await _run_create_admin("ops@example.com", "--activate")
-    assert "Account reactivated." in lines
-    await login(client, "ops@example.com")
-
-
-async def test_create_admin_new_user_prompts_and_creates_admin(client, monkeypatch):
-    await make_user("admin@example.com")
-    asked = _prompts(monkeypatch, NEW_PASSWORD)
-    assert await _run_create_admin("new@example.com") == ["Created admin new@example.com."]
-    assert len(asked) == 2
-    data = await login(client, "new@example.com", NEW_PASSWORD)
-    assert data["user"]["roles"] == ["admin"]
 
 
 # ------------------------------------------------------------------ encryption keys
@@ -356,7 +204,7 @@ async def test_rotate_encryption_key_reencrypts_every_secret(settings_env):
         host = await db.scalar(select(Host).where(Host.name == "h1"))
         assert (host.private_key, host.key_passphrase, host.password) == ("PRIVATE", "PHRASE", "PW")
         assert (await db.scalar(select(Instance))).env == {"TOKEN": "abc"}
-        assert (await db.scalar(select(OAuthAccount))).access_token == "gho_secret"
+        assert (await db.scalar(select(OAuthAccount).where(OAuthAccount.provider == "github"))).access_token == "gho_secret"
         lost_raw = await _raw(db, "SELECT password FROM hosts WHERE name = 'lost'")
         assert Fernet(K3.encode()).decrypt(lost_raw.encode()) == b"LOST"  # left untouched
 
@@ -481,26 +329,6 @@ def _load_seeder():
     return module
 
 
-async def test_seeded_demo_users_have_no_password(client):
-    await make_user("admin@example.com")
-    await _load_seeder().main()
-    demo = ["maria@example.com", "james@example.com", "sarah@example.com"]
-    guess = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Bl"  # what every demo user used to share
-    for email in demo:
-        r = await client.post("/api/v1/auth/login", json={"email": email, "password": guess})
-        assert r.status_code == 401
-    async with get_sessionmaker()() as db:
-        users = (await db.scalars(select(User).where(User.email.in_(demo)))).all()
-    assert len(users) == 3 and all(u.password_hash is None for u in users)
-
-
-async def test_seeder_refuses_to_make_a_demo_user_the_first_admin():
-    with pytest.raises(SystemExit, match="admin"):
-        await _load_seeder().main()
-    async with get_sessionmaker()() as db:
-        assert (await db.scalars(select(User))).all() == []
-
-
 # ------------------------------------------------------------------- input bounds
 
 
@@ -512,9 +340,10 @@ async def test_audit_query_params_are_bounded(admin_client, query):
 
 
 async def test_audit_action_filter_is_a_literal_prefix(admin_client):
-    assert (await admin_client.get("/api/v1/audit?action=auth.")).json()
-    assert (await admin_client.get("/api/v1/audit?action=auth%25")).json() == []
-    assert (await admin_client.get("/api/v1/audit?action=auth_login")).json() == []
+    await admin_client.post("/api/v1/hosts", json={"name": "h1", "hostname": "10.0.0.1", "username": "deploy"})
+    assert (await admin_client.get("/api/v1/audit?action=host.")).json()
+    assert (await admin_client.get("/api/v1/audit?action=host%25")).json() == []
+    assert (await admin_client.get("/api/v1/audit?action=host_create")).json() == []
 
 
 @pytest.mark.parametrize("query", ["limit=-1", "limit=0", "limit=201", f"status={'x' * 17}"])
@@ -544,18 +373,3 @@ def test_instance_env_and_mappings_are_bounded():
         InstanceUpdate(ports=[{"host": 8000, "container": 80}] * 101)
 
 
-async def test_long_current_password_is_rejected(admin_client):
-    r = await admin_client.post(
-        "/api/v1/auth/me/password", json={"current_password": "x" * 501, "new_password": "a-new-long-password"}
-    )
-    assert r.status_code == 422
-
-
-async def test_role_lists_are_bounded(admin_client):
-    body = {"email": "new@example.com", "password": NEW_PASSWORD}
-    r = await admin_client.post("/api/v1/users", json={**body, "roles": ["r" * 65]})
-    assert r.status_code == 422
-    r = await admin_client.post("/api/v1/users", json={**body, "roles": ["viewer"] * 51})
-    assert r.status_code == 422
-    r = await admin_client.post("/api/v1/roles", json={"name": "ops", "permissions": ["hosts:read"] * 201})
-    assert r.status_code == 422

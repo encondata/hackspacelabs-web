@@ -39,6 +39,24 @@
           "name": "admin",
           "description": "Access to the sample admin and customer portals"
         }
+      ],
+      "slipway": [
+        {
+          "name": "admin",
+          "description": "Slipway: full control, including users' tokens and audit"
+        },
+        {
+          "name": "maintainer",
+          "description": "Slipway: manage hosts, instances and deployments"
+        },
+        {
+          "name": "developer",
+          "description": "Slipway: sync repositories, operate instances and deploy"
+        },
+        {
+          "name": "viewer",
+          "description": "Slipway: read-only access"
+        }
       ]
     }
   },
@@ -71,6 +89,7 @@
         "oidc.ciba.grant.enabled": "false"
       },
       "defaultClientScopes": [
+        "basic",
         "web-origins",
         "profile",
         "email"
@@ -91,8 +110,53 @@
             "access.token.claim": "true",
             "userinfo.token.claim": "true"
           }
+        },
+        {
+          "name": "Slipway audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "slipway",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "Slipway roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "usermodel.clientRoleMapping.clientId": "slipway",
+            "claim.name": "slipway_roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
         }
       ]
+    },
+    {
+      "clientId": "slipway",
+      "name": "Slipway",
+      "description": "Deployment API behind the HackSpaceLabs gateway. Holds Slipway roles, accepts access tokens issued to hackspacelabs-web, and uses a read-only service account to check API-token owners.",
+      "protocol": "openid-connect",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "fullScopeAllowed": false,
+      "attributes": {
+        "oauth2.device.authorization.grant.enabled": "false",
+        "oidc.ciba.grant.enabled": "false"
+      }
     }
   ],
   "clientScopeMappings": {
@@ -102,6 +166,17 @@
         "roles": [
           "customer",
           "admin"
+        ]
+      }
+    ],
+    "slipway": [
+      {
+        "client": "hackspacelabs-web",
+        "roles": [
+          "admin",
+          "maintainer",
+          "developer",
+          "viewer"
         ]
       }
     ]
@@ -124,6 +199,9 @@
       ],
       "clientRoles": {
         "hackspacelabs-web": [
+          "admin"
+        ],
+        "slipway": [
           "admin"
         ]
       }

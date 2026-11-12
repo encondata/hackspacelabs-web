@@ -3,13 +3,10 @@ repository identity, transport errors, detection, truncation and log hygiene."""
 
 from __future__ import annotations
 
-import base64
 import http.server
-import json
 import logging
 import threading
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -21,62 +18,12 @@ from slipway.db.session import get_sessionmaker
 from slipway.models import OAuthAccount, Repository, User
 from slipway.services.github import GitHubClient, GitHubError, exchange_code
 from slipway.services.repos import GitHubNotLinked, github_token_for, sync_repositories
-from slipway.services.users import create_user
-from slipway.web import oauth
-from tests.conftest import login, make_user
 
 SHA = "a" * 40
 PROFILE = {"id": 1001, "login": "octocat", "name": "Mona Octocat", "avatar_url": "https://avatars.githubusercontent.com/u/1001"}
 
 
 # ----------------------------------------------------------------- OAuth helpers
-
-
-class FakeGH:
-    profile: dict = PROFILE
-    email = ("mona@example.com", True)
-    orgs: list[dict] = []
-
-    def __init__(self, token):
-        assert token == "gho_test"
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return None
-
-    async def get_user(self):
-        return self.profile
-
-    async def get_primary_email(self):
-        return self.email
-
-    async def get_orgs(self):
-        return self.orgs
-
-
-@pytest.fixture
-def gh(monkeypatch):
-    async def exchange(code):
-        assert code == "good-code"
-        return "gho_test", "read:user,user:email,repo"
-
-    monkeypatch.setattr(oauth, "exchange_code", exchange)
-    monkeypatch.setattr(oauth, "GitHubClient", FakeGH)
-    FakeGH.profile, FakeGH.email, FakeGH.orgs = PROFILE, ("mona@example.com", True), []
-    return FakeGH
-
-
-async def _start(client, path="/auth/github/login?next=/hosts") -> str:
-    r = await client.get(path)
-    assert r.status_code == 302
-    return parse_qs(urlparse(r.headers["location"]).query)["state"][0]
-
-
-async def _callback(client, state: str, cookies: str | bytes | None = None) -> httpx.Response:
-    headers = {"Cookie": cookies} if cookies is not None else {}
-    return await client.get(f"/auth/github/callback?code=good-code&state={state}", headers=headers)
 
 
 async def _me(client) -> dict | None:
@@ -92,230 +39,22 @@ async def _user(email: str) -> User | None:
 # ------------------------------------------- first sign-in vs. allowlists (17, 6)
 
 
-async def test_empty_db_does_not_bypass_user_allowlist(client, gh, monkeypatch):
-    monkeypatch.setattr(get_settings(), "github_allowed_users", ["alice"])
-    r = await _callback(client, await _start(client))
-    assert r.headers["location"] == "/login?error=not_allowed&login=octocat"
-    assert await _me(client) is None
-
-
-async def test_empty_db_does_not_bypass_org_allowlist(client, gh, monkeypatch):
-    monkeypatch.setattr(get_settings(), "github_allowed_orgs", ["alice-org"])
-    gh.orgs = [{"id": 5, "login": "other-org"}]
-    r = await _callback(client, await _start(client))
-    assert r.headers["location"] == "/login?error=not_allowed&login=octocat"
-
-
-async def test_allowlisted_first_user_still_becomes_admin(client, gh, monkeypatch):
-    monkeypatch.setattr(get_settings(), "github_allowed_users", ["octocat"])
-    await _callback(client, await _start(client))
-    assert (await _me(client))["roles"] == ["admin"]
-
-
 # ------------------------------------------------ id-based allowlists (26, 14)
-
-
-async def test_user_allowlist_matches_immutable_id(client, gh, monkeypatch):
-    await make_user("admin@example.com")
-    monkeypatch.setattr(get_settings(), "github_allowed_users", ["id:1001"])
-    await _callback(client, await _start(client))
-    assert (await _me(client))["github_login"] == "octocat"
-
-
-async def test_user_id_entry_rejects_squatter_of_the_name(make_client, gh, monkeypatch):
-    await make_user("admin@example.com")
-    monkeypatch.setattr(get_settings(), "github_allowed_users", ["id:1001"])
-    gh.profile = {"id": 6666, "login": "1001", "name": "Squatter"}
-    client = make_client()
-    r = await _callback(client, await _start(client))
-    assert r.headers["location"] == "/login?error=not_allowed&login=1001"
-
-
-async def test_org_allowlist_matches_immutable_id(make_client, gh, monkeypatch):
-    await make_user("admin@example.com")
-    monkeypatch.setattr(get_settings(), "github_allowed_orgs", ["id:77"])
-
-    gh.orgs = [{"id": 99, "login": "id:77"}, {"id": 12, "login": "acme"}]
-    blocked = make_client()
-    r = await _callback(blocked, await _start(blocked))
-    assert r.headers["location"].startswith("/login?error=not_allowed")
-
-    gh.orgs = [{"id": 77, "login": "acme-renamed"}]
-    allowed = make_client()
-    await _callback(allowed, await _start(allowed))
-    assert (await _me(allowed))["roles"] == ["viewer"]
-
-
-@pytest.mark.parametrize(
-    ("status", "location"),
-    [(None, "/login?error=failed"), (502, "/login?error=failed"), (403, "/login?error=not_allowed&login=octocat")],
-)
-async def test_org_check_hiccup_is_a_retry_not_a_refusal(make_client, gh, monkeypatch, status, location):
-    await make_user("admin@example.com")
-    monkeypatch.setattr(get_settings(), "github_allowed_orgs", ["acme"])
-
-    async def get_orgs(self):
-        raise GitHubError("GitHub API /user/orgs: request failed (ReadTimeout)", status)
-
-    monkeypatch.setattr(gh, "get_orgs", get_orgs)
-    client = make_client()
-    r = await _callback(client, await _start(client))
-    assert r.headers["location"] == location
 
 
 # ---------------------------------------------------- OAuth state binding (24)
 
 
-def _forge(payload: dict) -> str:
-    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
-
-
-async def test_unsigned_link_cookie_cannot_link_victim(make_client, gh):
-    await make_user("victim@example.com")
-    victim = make_client()
-    await login(victim, "victim@example.com")
-    session = victim.cookies["slipway_session"]
-    forged = _forge({"s": "attacker-chosen-state", "m": "link", "n": "/settings"})
-    r = await _callback(victim, "attacker-chosen-state", f"slipway_session={session}; slipway_oauth={forged}")
-    assert "error=state" in r.headers["location"]
-    assert (await _me(victim))["github_login"] is None
-
-
-async def test_link_state_from_another_session_is_rejected(make_client, gh):
-    await make_user("victim@example.com")
-    await make_user("attacker@example.com")
-    attacker, victim = make_client(), make_client()
-    await login(attacker, "attacker@example.com")
-    await login(victim, "victim@example.com")
-    state = await _start(attacker, "/auth/github/link")
-    tossed = attacker.cookies[oauth.STATE_COOKIE]
-    r = await _callback(victim, state, f"slipway_session={victim.cookies['slipway_session']}; slipway_oauth={tossed}")
-    assert r.headers["location"] == "/settings?error=state"
-    assert (await _me(victim))["github_login"] is None
-    assert (await _me(attacker))["github_login"] is None
-
-
-async def test_link_without_session_reports_session_expired(client, gh):
-    await make_user("admin@example.com")
-    await login(client, "admin@example.com")
-    state = await _start(client, "/auth/github/link")
-    r = await _callback(client, state, f"slipway_oauth={client.cookies[oauth.STATE_COOKIE]}")
-    assert r.headers["location"] == "/login?error=session_expired"
-
-
-async def test_signed_cookie_mode_cannot_be_changed(client, gh):
-    await make_user("admin@example.com")
-    state = await _start(client)
-    body, _, sig = client.cookies[oauth.STATE_COOKIE].strip('"').partition(".")
-    payload = json.loads(base64.urlsafe_b64decode(body))
-    tampered = f"{_forge({**payload, 'm': 'link', 'n': '/evil'})}.{sig}"
-    r = await _callback(client, state, f"slipway_oauth={tampered}")
-    assert r.headers["location"] == "/login?error=state"
-
-
-async def test_link_flow_still_works_and_reports_codes(make_client, gh):
-    await make_user("admin@example.com")
-    await make_user("other@example.com")
-    owner, other = make_client(), make_client()
-    await login(owner, "admin@example.com")
-    r = await _callback(owner, await _start(owner, "/auth/github/link"))
-    assert r.headers["location"] == "/settings?linked=1"
-
-    await login(other, "other@example.com")
-    r = await _callback(other, await _start(other, "/auth/github/link"))
-    assert r.headers["location"] == "/settings?error=already_linked&login=octocat"
-
-
 # --------------------------------------------- malformed state / cookie (27)
-
-
-async def test_non_ascii_state_fails_cleanly(client, gh):
-    r = await client.get("/auth/github/callback?code=good-code&state=%C3%A9")
-    assert r.status_code == 302 and r.headers["location"] == "/login?error=state"
-    await _start(client)
-    r = await client.get("/auth/github/callback?code=good-code&state=%C3%A9")
-    assert r.status_code == 302 and r.headers["location"] == "/login?error=state"
-
-
-@pytest.mark.parametrize("cookie", [_forge([]), "not-base64!!", "%C3%A9.%C3%A9", "é.é"])
-async def test_malformed_state_cookie_fails_cleanly(client, gh, cookie):
-    r = await _callback(client, "abc", f"slipway_oauth={cookie}".encode())
-    assert r.status_code == 302 and r.headers["location"] == "/login?error=state"
-
-
-async def test_signed_cookie_that_is_not_an_object_fails_cleanly(client, gh):
-    body = _forge(["abc"])
-    r = await _callback(client, "abc", f"slipway_oauth={body}.{oauth._sign('cookie', body)}")
-    assert r.status_code == 302 and r.headers["location"] == "/login?error=state"
-
-
-async def test_github_cancel_is_a_code(client, gh):
-    r = await client.get("/auth/github/callback?error=access_denied")
-    assert r.headers["location"] == "/login?error=cancelled"
-
-
-def test_login_param_only_for_valid_github_logins():
-    assert oauth._fail("not_allowed", login="octo-cat").headers["location"] == "/login?error=not_allowed&login=octo-cat"
-    assert oauth._fail("not_allowed", login="<b>x</b>").headers["location"] == "/login?error=not_allowed"
-    assert oauth._fail("not_allowed", login="a" * 40).headers["location"] == "/login?error=not_allowed"
 
 
 # --------------------------------------- sign-up errors are not "email in use" (15, 28)
 
 
-async def test_missing_default_role_is_a_config_error(client, gh, monkeypatch):
-    await make_user("admin@example.com")
-    monkeypatch.setattr(get_settings(), "allow_signup", True)
-    monkeypatch.setattr(get_settings(), "default_role", "deployers")
-    r = await _callback(client, await _start(client))
-    assert r.headers["location"] == "/login?error=config"
-    assert await _user("mona@example.com") is None
-
-
-async def test_real_email_collision_is_email_in_use(client, gh, monkeypatch):
-    await make_user("admin@example.com")
-    await make_user("mona@example.com")
-    monkeypatch.setattr(get_settings(), "allow_signup", True)
-    r = await _callback(client, await _start(client))
-    assert r.headers["location"] == "/login?error=email_in_use"
-
-
 # -------------------------------------------------------- safe_next (36, 18)
 
 
-@pytest.mark.parametrize(
-    "value",
-    ["/\t/evil.example", "/\n/evil.example", "/\r/evil.example", "/\x00x", "/x\x7f", "/\\evil.example",
-     "//evil.example", "https://evil.example", "evil.example", "javascript:alert(1)", ""],
-)
-def test_safe_next_rejects_unsafe_values(value):
-    assert oauth.safe_next(value) == "/"
-
-
-def test_safe_next_keeps_relative_paths():
-    assert oauth.safe_next("/instances?x=1#top") == "/instances?x=1#top"
-    assert oauth.safe_next("/a:b/c") == "/a:b/c"
-
-
-async def test_login_page_drops_control_character_next(client):
-    r = await client.get("/login?next=%2F%09%2Fevil.example%2Flogin")
-    assert r.status_code == 200 and "evil.example" not in r.text
-
-
 # ------------------------------------------------- truncation in OAuth (29, 70)
-
-
-async def test_oauth_signup_fits_columns(client, gh):
-    gh.profile = {**PROFILE, "name": "N" * 250, "avatar_url": "https://avatars.example/" + "a" * 600}
-    await _callback(client, await _start(client))
-    user = await _user("mona@example.com")
-    assert user is not None and len(user.full_name) == 200 and user.avatar_url is None
-
-
-async def test_oauth_rejects_email_longer_than_column(client, gh):
-    gh.email = ("m" * 320 + "@example.com", True)
-    r = await _callback(client, await _start(client))
-    assert r.headers["location"] == "/login?error=no_verified_email"
 
 
 # ------------------------------------------------ GitHub client over MockTransport
@@ -425,15 +164,6 @@ async def test_transport_errors_become_github_errors(tmp_path: Path):
         await exchange_code("code", transport=httpx.MockTransport(_timeout))
 
 
-async def test_oauth_callback_survives_transport_error(client, gh, monkeypatch):
-    async def failing_exchange(code):
-        return await exchange_code(code, transport=httpx.MockTransport(_timeout))
-
-    monkeypatch.setattr(oauth, "exchange_code", failing_exchange)
-    r = await _callback(client, await _start(client))
-    assert r.status_code == 302 and r.headers["location"] == "/login?error=failed"
-
-
 async def test_readme_endpoint_reports_transport_error(admin_client, monkeypatch):
     repo = await _seed_repo()
     _patch_api_client(monkeypatch, _timeout)
@@ -451,7 +181,8 @@ def _repo_json(github_id: int, **extra) -> dict:
 
 
 async def _linked_user(db) -> User:
-    user = await create_user(db, email="dev@example.com", full_name="Dev")
+    user = User(email="dev@example.com", full_name="Dev", roles=[], oauth_accounts=[])
+    db.add(user)
     user.oauth_accounts.append(OAuthAccount(provider="github", provider_user_id="1", login="dev", access_token="gho_x"))
     await db.commit()
     return user

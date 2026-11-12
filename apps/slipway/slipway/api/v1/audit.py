@@ -31,7 +31,7 @@ async def list_events(
         AuditOut(
             id=e.id,
             action=e.action,
-            actor=e.actor.email if e.actor else None,
+            actor=e.actor.display_name if e.actor else None,
             target_type=e.target_type,
             target_id=e.target_id,
             summary=e.summary,

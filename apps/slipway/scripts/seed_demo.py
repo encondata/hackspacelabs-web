@@ -5,8 +5,8 @@ For UI work without GitHub or real Docker hosts. Refuses to run in production.
     SLIPWAY_DATABASE_URL=sqlite+aiosqlite:///data/slipway-demo.db .venv/bin/python scripts/seed_demo.py
 
 Hosts get random (fake) pinned keys, so "Check" against them will fail; that's expected.
-Create your own admin first (SLIPWAY_ADMIN_EMAIL/SLIPWAY_ADMIN_PASSWORD or `slipway create-admin`): the demo
-team members have no password and cannot sign in.
+People sign in through HackSpaceLabs (Keycloak); the demo team members are plain rows with no Keycloak link,
+so they only appear as "created by" / "triggered by" and can never sign in.
 """
 
 from __future__ import annotations
@@ -25,9 +25,9 @@ from slipway.cli import migrate  # noqa: E402
 from slipway.core.config import get_settings  # noqa: E402
 from slipway.db.base import utcnow  # noqa: E402
 from slipway.db.session import dispose_engine, get_sessionmaker  # noqa: E402
-from slipway.models import Deployment, Host, Instance, Repository  # noqa: E402
+from slipway.models import Deployment, Host, Instance, Repository, Role, User  # noqa: E402
 from slipway.services import ssh  # noqa: E402
-from slipway.services.users import bootstrap, create_user, get_user_by_email, user_count  # noqa: E402
+from slipway.services.users import bootstrap  # noqa: E402
 
 REPOS = [
     ("slipway-web", "Slipway web app (dashboard, API, and console)", "TypeScript", "public", True, "docker-compose.yml"),
@@ -79,15 +79,14 @@ async def main() -> None:
         if await db.scalar(select(func.count()).select_from(Repository)):
             print("Database already has repositories; nothing to do.")
             return
-        if await user_count(db) == 0:
-            # Otherwise the first demo user would silently become the only (password-less) admin.
-            sys.exit("Create an admin first (set SLIPWAY_ADMIN_EMAIL/SLIPWAY_ADMIN_PASSWORD or run `slipway create-admin`)")
         team = []
         for email, name, role in [("maria@example.com", "Maria Lopez", "developer"), ("james@example.com", "James Park", "maintainer"),
                                   ("sarah@example.com", "Sarah Chen", "viewer")]:
-            # No password: demo users only fill in "created by" / "triggered by" and never sign in.
-            user = await get_user_by_email(db, email) or await create_user(
-                db, email=email, password=None, full_name=name, role_names=[role])
+            # Demo users have no Keycloak link: they only fill in "created by" / "triggered by" and never sign in.
+            user = await db.scalar(select(User).where(User.email == email))
+            if user is None:
+                user = User(email=email, full_name=name, roles=[await db.scalar(select(Role).where(Role.name == role))], oauth_accounts=[])
+                db.add(user)
             team.append(user)
 
         now = utcnow()

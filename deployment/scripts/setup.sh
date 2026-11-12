@@ -58,6 +58,7 @@ get_setting() { awk -F= -v key="$1" '$1==key {value=substr($0,length(key)+2)} EN
 ensure_secret() { [[ -n "$(get_setting "$1")" ]] || set_setting "$1" "$2"; }
 ensure_secret SLIPWAY_DB_PASSWORD "$(openssl rand -hex 48)"
 ensure_secret SLIPWAY_SECRET_KEY "$(openssl rand -hex 48)"
+ensure_secret SLIPWAY_OIDC_CLIENT_SECRET "$(openssl rand -hex 48)"
 # Fernet key: urlsafe base64 of 32 random bytes.
 ensure_secret SLIPWAY_ENCRYPTION_KEY "$(openssl rand -base64 32 | tr '+/' '-_')"
 if [[ "$access_mode" == lan ]]; then

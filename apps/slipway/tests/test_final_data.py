@@ -31,7 +31,6 @@ from slipway.models.repository import DEFAULT_BRANCH_TOO_LONG
 from slipway.services import deployer, hosts, ssh
 from slipway.services.github import GitHubClient
 from slipway.services.repos import sync_repositories
-from slipway.services.users import create_user
 from tests.test_deployer import SHA, FakeGitHub, FakeRemote, _connect
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -201,12 +200,9 @@ async def test_nul_in_request_bodies_is_a_422(admin_client, make_client, postgre
     repo_id, host_id = await _seed_repo_and_host()
     instance = {"name": "web", "repository_id": repo_id, "host_id": host_id, "deploy": False}
     requests = [
-        ("patch", "/api/v1/auth/me", {"full_name": "Al\x00ice"}),
         ("post", "/api/v1/tokens", {"name": "ci\x00"}),
         ("post", "/api/v1/hosts", {"name": "h1", "hostname": "10.0.0.7", "username": "deploy", "description": "d\x00"}),
         ("post", "/api/v1/hosts", {"name": "h2", "hostname": "10.0.0.8", "username": "deploy", "environment": "p\x00"}),
-        ("post", "/api/v1/roles", {"name": "ops", "description": "x\x00", "permissions": ["hosts:read"]}),
-        ("post", "/api/v1/users", {"email": "new@example.com", "full_name": "N\x00", "roles": ["viewer"]}),
         ("post", "/api/v1/instances", {**instance, "name": "web\x00"}),
         ("post", "/api/v1/instances", {**instance, "volumes": [{"source": "/srv/a\x00b", "target": "/data"}]}),
         ("post", "/api/v1/instances", {**instance, "volumes": [{"source": "/srv/a", "target": "/da\x00ta"}]}),
@@ -215,9 +211,8 @@ async def test_nul_in_request_bodies_is_a_422(admin_client, make_client, postgre
         r = await getattr(admin_client, method)(url, json=body)
         assert r.status_code == 422, (url, body, r.status_code)
         assert "NUL" in r.text
-    login = await make_client("10.1.1.1").post("/api/v1/auth/login", json={"email": "x\x00@example.com", "password": "whatever-1"})
-    assert login.status_code == 422
-    assert login.json()["detail"][0]["msg"] == "Value error, must not contain NUL characters"
+    r = await admin_client.post("/api/v1/tokens", json={"name": "ci\x00"})
+    assert r.json()["detail"][0]["msg"] == "Value error, must not contain NUL characters"
     # The guard leaves the fields' own limits, patterns and messages alone.
     for url, body, message in [
         ("/api/v1/tokens", {"name": "t" * 101}, "String should have at most 100 characters"),
@@ -231,7 +226,7 @@ async def test_nul_in_request_bodies_is_a_422(admin_client, make_client, postgre
 @pytest.mark.parametrize("url", [
     "/api/v1/repositories?q=a%00",
     "/api/v1/audit?action=a%00",
-    "/search?q=a%00",
+    "/api/v1/instances?q=a%00",
     f"/api/v1/hosts/{uuid.uuid4()}%00",
     "/api/v1/hosts/%00",
 ])
@@ -302,7 +297,8 @@ class _GitHub:
 
 
 async def _linked_user(db) -> User:
-    user = await create_user(db, email="dev@example.com", full_name="Dev")
+    user = User(email="dev@example.com", full_name="Dev", roles=[], oauth_accounts=[])
+    db.add(user)
     user.oauth_accounts.append(OAuthAccount(provider="github", provider_user_id="1", login="dev", access_token="gho_x"))
     await db.commit()
     return user

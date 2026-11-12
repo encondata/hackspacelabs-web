@@ -1,4 +1,4 @@
-"""Accounts, roles, linked OAuth identities, browser sessions and API tokens."""
+"""Accounts (mirrored from Keycloak), roles, linked identities and API tokens."""
 
 from __future__ import annotations
 
@@ -31,10 +31,10 @@ class Role(UUIDPrimaryKey, Timestamps, Base):
 class User(UUIDPrimaryKey, Timestamps, Base):
     __tablename__ = "users"
 
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    # Keycloak accounts need not have an email address (HackSpaceLabs signs in by username).
+    email: Mapped[str | None] = mapped_column(String(320), unique=True, index=True)
+    username: Mapped[str | None] = mapped_column(String(255))
     full_name: Mapped[str] = mapped_column(String(200), default="")
-    # Null for accounts that only sign in with GitHub.
-    password_hash: Mapped[str | None] = mapped_column(String(255))
     avatar_url: Mapped[str | None] = mapped_column(String(500))
     is_active: Mapped[bool] = mapped_column(default=True)
     last_login_at: Mapped[datetime | None]
@@ -57,7 +57,7 @@ class User(UUIDPrimaryKey, Timestamps, Base):
 
     @property
     def display_name(self) -> str:
-        return self.full_name or self.email.split("@", 1)[0]
+        return self.full_name or self.username or (self.email or "").split("@", 1)[0] or "Unnamed user"
 
     @property
     def initials(self) -> str:
@@ -72,8 +72,17 @@ class User(UUIDPrimaryKey, Timestamps, Base):
     def github(self) -> OAuthAccount | None:
         return next((a for a in self.oauth_accounts if a.provider == "github"), None)
 
+    @property
+    def keycloak(self) -> OAuthAccount | None:
+        return next((a for a in self.oauth_accounts if a.provider == KEYCLOAK), None)
+
+
+KEYCLOAK = "keycloak"
+
 
 class OAuthAccount(UUIDPrimaryKey, Timestamps, Base):
+    """A linked external identity: the Keycloak account (``sub``) a user signs in as, and optionally GitHub."""
+
     __tablename__ = "oauth_accounts"
     __table_args__ = (UniqueConstraint("provider", "provider_user_id"),)
 
@@ -85,20 +94,6 @@ class OAuthAccount(UUIDPrimaryKey, Timestamps, Base):
     scopes: Mapped[str] = mapped_column(String(500), default="")
 
     user: Mapped[User] = relationship(back_populates="oauth_accounts")
-
-
-class UserSession(UUIDPrimaryKey, Timestamps, Base):
-    __tablename__ = "user_sessions"
-
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
-    csrf_token: Mapped[str] = mapped_column(String(64))
-    expires_at: Mapped[datetime]
-    last_seen_at: Mapped[datetime]
-    ip: Mapped[str | None] = mapped_column(String(64))
-    user_agent: Mapped[str | None] = mapped_column(String(300))
-
-    user: Mapped[User] = relationship(lazy="joined")
 
 
 class ApiToken(UUIDPrimaryKey, Timestamps, Base):

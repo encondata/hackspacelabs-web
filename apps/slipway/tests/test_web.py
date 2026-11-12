@@ -10,20 +10,6 @@ from slipway.models import Repository
 from tests.conftest import login, make_user
 
 
-async def test_anonymous_pages_redirect_to_login(client):
-    r = await client.get("/hosts")
-    assert r.status_code == 302 and r.headers["location"] == "/login?next=/hosts"
-    r = await client.get("/login")
-    assert r.status_code == 200 and "Continue with GitHub" in r.text
-
-
-async def test_favicon_ico_redirects_to_the_svg_icon(client):
-    r = await client.get("/favicon.ico")
-    assert r.status_code == 301 and r.headers["location"] == "/static/img/favicon.svg"
-    icon = await client.get("/static/img/favicon.svg")
-    assert icon.status_code == 200 and icon.headers["content-type"].startswith("image/svg+xml")
-
-
 def test_asyncssh_connection_chatter_is_kept_out_of_info_logs(app):
     import logging
 
@@ -37,47 +23,6 @@ async def _seed_repo() -> str:
         db.add(repo)
         await db.commit()
         return str(repo.id)
-
-
-async def test_every_page_renders_for_admin(admin_client, monkeypatch):
-    repo_id = await _seed_repo()
-    host = (await admin_client.post("/api/v1/hosts", json={"name": "prod-01", "hostname": "10.0.0.5", "username": "deploy", "environment": "prod"})).json()
-    inst = (await admin_client.post("/api/v1/instances", json={
-        "name": "web prod", "repository_id": repo_id, "host_id": host["id"], "deploy": False,
-        "env": {"NODE_ENV": "production"}, "ports": [{"host": 8080, "container": 3000}],
-    })).json()
-    pages = [
-        "/", "/repositories", f"/repositories?repo={repo_id}", "/hosts", f"/hosts/{host['id']}", "/instances",
-        "/instances/new", f"/instances/{inst['id']}", f"/instances/{inst['id']}/edit", "/deployments",
-        "/analytics", "/logs", "/search?q=web", "/settings", "/settings/tokens", "/settings/users",
-        "/settings/roles", "/settings/audit",
-    ]
-    for page in pages:
-        r = await admin_client.get(page)
-        assert r.status_code == 200, f"{page}: {r.status_code}\n{r.text[:2000]}"
-        assert "Slipway" in r.text
-    assert "ssh-ed25519" in (await admin_client.get(f"/hosts/{host['id']}")).text
-    assert (await admin_client.get("/hosts/00000000-0000-0000-0000-000000000000")).status_code == 404
-
-
-async def test_malformed_page_params_are_friendly(admin_client):
-    assert (await admin_client.get("/repositories?repo=")).status_code == 200
-    assert (await admin_client.get("/instances/new?repo=not-a-uuid")).status_code == 200
-    r = await admin_client.get("/instances/not-a-uuid", headers={"Accept": "text/html"})
-    assert r.status_code == 404 and "<html" in r.text
-    r = await admin_client.get("/api/v1/instances/not-a-uuid")
-    assert r.status_code == 422 and "detail" in r.json()
-
-
-async def test_viewer_sees_403_page(make_client):
-    await make_user("admin@example.com")
-    await make_user("viewer@example.com", roles=["viewer"])
-    viewer = make_client()
-    await login(viewer, "viewer@example.com")
-    r = await viewer.get("/settings/users")
-    assert r.status_code == 403 and "users:read" in r.text
-    assert (await viewer.get("/instances/new")).status_code == 403
-    assert (await viewer.get("/")).status_code == 200
 
 
 async def test_host_key_methods(admin_client):

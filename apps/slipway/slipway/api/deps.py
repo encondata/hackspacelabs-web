@@ -1,4 +1,9 @@
-"""Authentication, CSRF and permission dependencies shared by the API and web pages."""
+"""Authentication and permission dependencies.
+
+Slipway is only reachable through the HackSpaceLabs gateway, which handles browser sessions, CSRF and
+origin checks. Every request carries ``Authorization: Bearer <token>``: a Keycloak access token for a
+signed-in person (verified here, never trusted on the gateway's word), or a Slipway API token.
+"""
 
 from __future__ import annotations
 
@@ -7,32 +12,39 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from slipway.core.security import safe_equals
+from slipway.core.security import API_TOKEN_PREFIX
 from slipway.db.session import get_db
-from slipway.services.auth import (
-    CSRF_HEADER,
-    SESSION_COOKIE,
-    AuthContext,
-    session_from_cookie,
-    token_from_bearer,
-)
+from slipway.services.auth import AuthContext, token_from_bearer
+from slipway.services.identity import refresh_owner, user_for_claims
+from slipway.services.oidc import IdentityUnavailable, TokenError, owners, verify_access_token
 
 DB = Annotated[AsyncSession, Depends(get_db)]
-SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+UNAVAILABLE = "Sign-in service unavailable; try again shortly"
 
 
 async def get_optional_auth(request: Request, db: DB) -> AuthContext | None:
     authz = request.headers.get("authorization", "")
     ctx: AuthContext | None = None
     if authz[:7].lower() == "bearer ":
-        token = await token_from_bearer(db, authz[7:].strip())
-        if token is None:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired API token")
-        ctx = AuthContext(user=token.user, via="token", token=token)
-    elif raw := request.cookies.get(SESSION_COOKIE):
-        session = await session_from_cookie(db, raw)
-        if session is not None:
-            ctx = AuthContext(user=session.user, via="session", session=session)
+        raw = authz[7:].strip()
+        try:
+            if raw.startswith(API_TOKEN_PREFIX):
+                token = await token_from_bearer(db, raw)
+                if token is None or token.user.keycloak is None:
+                    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired API token")
+                owner = await owners.get(token.user.keycloak.provider_user_id)
+                user = await refresh_owner(db, token.user, owner, request)
+                if not user.is_active:
+                    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The owner of this API token is disabled in HackSpaceLabs")
+                ctx = AuthContext(user=user, via="token", token=token)
+            else:
+                claims = await verify_access_token(raw)
+                ctx = AuthContext(user=await user_for_claims(db, claims, request), via="keycloak", claims=claims)
+        except TokenError as exc:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
+        except IdentityUnavailable as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, UNAVAILABLE) from exc
     request.state.auth = ctx
     return ctx
 
@@ -40,18 +52,23 @@ async def get_optional_auth(request: Request, db: DB) -> AuthContext | None:
 OptionalAuth = Annotated[AuthContext | None, Depends(get_optional_auth)]
 
 
-async def get_auth(request: Request, ctx: OptionalAuth) -> AuthContext:
+async def get_auth(ctx: OptionalAuth) -> AuthContext:
     if ctx is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
-    # Cookie-authenticated writes must echo the per-session CSRF token in a header.
-    if ctx.via == "session" and request.method not in SAFE_METHODS:
-        sent = request.headers.get(CSRF_HEADER, "")
-        if not (ctx.session and safe_equals(sent, ctx.session.csrf_token)):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "CSRF token missing or invalid")
     return ctx
 
 
 Auth = Annotated[AuthContext, Depends(get_auth)]
+
+
+async def get_interactive(ctx: Auth) -> AuthContext:
+    """A person signed in to HackSpaceLabs, not an API token (creating tokens, linking GitHub)."""
+    if not ctx.interactive:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This can only be done from the HackSpaceLabs portal")
+    return ctx
+
+
+Interactive = Annotated[AuthContext, Depends(get_interactive)]
 
 
 def require(*permissions: str):

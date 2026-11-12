@@ -7,9 +7,8 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
-from slipway.core.permissions import validate_permissions
 from slipway.models import Deployment, Host, Instance, Repository, User
 from slipway.services import deployer
 
@@ -33,9 +32,7 @@ NoNul = AfterValidator(_no_nul)
 # follow a validator are checked outside the string, with vaguer messages and no OpenAPI pattern.
 Str = Annotated[str, NoNul]
 
-# List items are bounded like the columns they end up in (roles.name is String(64)).
-RoleName = Annotated[str, Field(max_length=64), NoNul]
-Permission = Annotated[str, Field(max_length=64), NoNul]
+# List items are bounded like the columns they end up in.
 EnvKey = Annotated[str, Field(max_length=255), NoNul]
 EnvValue = Annotated[str, Field(max_length=32768), NoNul]
 
@@ -44,35 +41,13 @@ class Out(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# --------------------------------------------------------------------------- auth
-
-
-class LoginIn(BaseModel):
-    email: Str = Field(max_length=320)
-    password: str = Field(max_length=500)
-
-
-class RegisterIn(BaseModel):
-    email: EmailStr = Field(max_length=320)
-    password: str = Field(max_length=500)
-    full_name: Str = Field("", max_length=200)
-
-
-class ProfileUpdate(BaseModel):
-    full_name: Str = Field(max_length=200)
-
-
-class PasswordChange(BaseModel):
-    current_password: str | None = Field(None, max_length=500)
-    new_password: str = Field(max_length=500)
-
-
 # -------------------------------------------------------------------------- users
 
 
 class UserOut(Out):
     id: uuid.UUID
-    email: str
+    username: str | None
+    email: str | None
     full_name: str
     display_name: str
     avatar_url: str | None
@@ -80,7 +55,6 @@ class UserOut(Out):
     roles: list[str]
     permissions: list[str]
     github_login: str | None
-    has_password: bool
     created_at: datetime
     last_login_at: datetime | None
 
@@ -88,6 +62,7 @@ class UserOut(Out):
     def of(cls, user: User) -> UserOut:
         return cls(
             id=user.id,
+            username=user.username,
             email=user.email,
             full_name=user.full_name,
             display_name=user.display_name,
@@ -96,31 +71,13 @@ class UserOut(Out):
             roles=user.role_names,
             permissions=sorted(user.permissions),
             github_login=user.github.login if user.github else None,
-            has_password=user.password_hash is not None,
             created_at=user.created_at,
             last_login_at=user.last_login_at,
         )
 
 
-class SessionOut(BaseModel):
-    user: UserOut
-    csrf_token: str
-
-
-class UserCreate(BaseModel):
-    email: EmailStr = Field(max_length=320)
-    full_name: Str = Field("", max_length=200)
-    password: str | None = Field(None, max_length=500)
-    # Pre-link a GitHub account so the user can sign in with GitHub straight away.
-    github_login: Annotated[str, Field(max_length=39, pattern=r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"), NoNul] | None = None
-    roles: list[RoleName] = Field(default_factory=lambda: ["viewer"], max_length=50)
-
-
-class UserUpdate(BaseModel):
-    full_name: Annotated[str, Field(max_length=200), NoNul] | None = None
-    is_active: bool | None = None
-    roles: list[RoleName] | None = Field(None, max_length=50)
-    password: str | None = Field(None, max_length=500)
+class GitHubLinkStart(BaseModel):
+    authorize_url: str
 
 
 # -------------------------------------------------------------------------- roles
@@ -132,27 +89,6 @@ class RoleOut(Out):
     description: str
     permissions: list[str]
     is_system: bool
-
-
-class RoleIn(BaseModel):
-    name: Str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
-    description: Str = Field("", max_length=255)
-    permissions: list[Permission] = Field(max_length=200)
-
-    @field_validator("permissions")
-    @classmethod
-    def _perms(cls, v: list[str]) -> list[str]:
-        return validate_permissions(v)
-
-
-class RoleUpdate(BaseModel):
-    description: Annotated[str, Field(max_length=255), NoNul] | None = None
-    permissions: list[Permission] | None = Field(None, max_length=200)
-
-    @field_validator("permissions")
-    @classmethod
-    def _perms(cls, v: list[str] | None) -> list[str] | None:
-        return None if v is None else validate_permissions(v)
 
 
 class PermissionOut(BaseModel):
