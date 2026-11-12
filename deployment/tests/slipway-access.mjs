@@ -35,6 +35,21 @@ const service=await token('hackspacelabs',{grant_type:'client_credentials',clien
 // Slipway finds its own client id from its service account's direct role mappings (marker role service-account).
 const own=JSON.parse(Buffer.from(service.split('.')[1],'base64url').toString()).sub;
 assert.ok(own,'service token names its user');
+// Diagnostics (temporary): what role-mappings returns to each caller, and whether a chosen client id is kept.
+for(const [who,bearer] of [['service',service],['admin',admin]]){
+  const r=await fetch(base+'/admin/realms/hackspacelabs/users/'+own+'/role-mappings',{headers:{Authorization:'Bearer '+bearer}});
+  const body=await r.json().catch(()=>null);
+  console.log('probe role-mappings',who,r.status,JSON.stringify({realm:(body?.realmMappings||[]).map(x=>x.name),clients:Object.fromEntries(Object.entries(body?.clientMappings||{}).map(([k,v])=>[k,{id:v.id,client:v.client,roles:(v.mappings||[]).map(m=>m.name)}]))}));
+}
+{
+  const [real]=await get('/clients?clientId=slipway',admin);
+  console.log('probe slipway client id',real?.id);
+  const chosen='0b9f5e2a-4c1d-4e8f-9a3b-7d6c5b4a3f21';
+  const made=await fetch(base+'/admin/realms/hackspacelabs/clients',{method:'POST',headers:{Authorization:'Bearer '+admin,'Content-Type':'application/json'},body:JSON.stringify({id:chosen,clientId:'ci-probe-fixed-id',publicClient:false,standardFlowEnabled:false})});
+  const [probe]=await get('/clients?clientId=ci-probe-fixed-id',admin);
+  console.log('probe create-with-id',made.status,'kept:',probe?.id===chosen,'got:',probe?.id);
+  if(probe)await fetch(base+'/admin/realms/hackspacelabs/clients/'+probe.id,{method:'DELETE',headers:{Authorization:'Bearer '+admin}});
+}
 const slipway=(await get('/users/'+own+'/role-mappings',service)).clientMappings?.slipway;
 assert.ok(slipway?.id,'service account finds its own client id through the marker role');
 assert.equal((await get('/users/'+user.id,service)).enabled,true);
