@@ -11,8 +11,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -162,7 +160,6 @@ class KeycloakAdmin:
         self.transport = transport
         self._token: str | None = None
         self._token_expires = 0.0
-        self._slipway_client_id: str | None = None
         self._lock = asyncio.Lock()
 
     async def _access_token(self, client: httpx.AsyncClient) -> str:
@@ -185,29 +182,6 @@ class KeycloakAdmin:
         token = await self._access_token(client)
         return await client.get(get_settings().oidc_admin_url + path, headers={"Authorization": f"Bearer {token}"})
 
-    async def _own_client_id(self, client: httpx.AsyncClient) -> str:
-        """Slipway's own client id (Keycloak's internal UUID), found with view-users only.
-
-        Listing clients would need view-clients, which also exposes other clients' configuration and secrets. Instead:
-        the service account's token names its user (``sub``); that user holds the marker role ``service-account`` on
-        the slipway client (granted by configure-auth.mjs), and direct role mappings are grouped by client with the
-        client's id.
-        """
-        token = await self._access_token(client)
-        try:
-            payload = token.split(".")[1]
-            account = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["sub"]
-        except (IndexError, KeyError, ValueError) as exc:
-            raise IdentityUnavailable("Slipway's service-account token has no subject") from exc
-        found = await self._get(client, f"/users/{quote(str(account), safe='')}/role-mappings")
-        found.raise_for_status()
-        mapping = (found.json().get("clientMappings") or {}).get(get_settings().oidc_client_id)
-        if not isinstance(mapping, dict) or not mapping.get("id"):
-            raise IdentityUnavailable(
-                "Slipway's service account has no role on the slipway client; rerun the installer (configure-auth)"
-            )
-        return quote(str(mapping["id"]), safe="")
-
     async def owner(self, sub: str) -> OwnerStatus:
         async with self._lock:
             try:
@@ -216,11 +190,9 @@ class KeycloakAdmin:
                     if user.status_code == 404:
                         return OwnerStatus(exists=False)
                     user.raise_for_status()
-                    if self._slipway_client_id is None:
-                        self._slipway_client_id = await self._own_client_id(client)
                     # Effective roles, so roles granted through groups or composites count too.
                     mapped = await self._get(
-                        client, f"/users/{quote(sub, safe='')}/role-mappings/clients/{self._slipway_client_id}/composite"
+                        client, f"/users/{quote(sub, safe='')}/role-mappings/clients/{quote(get_settings().oidc_client_uuid, safe='')}/composite"
                     )
                     mapped.raise_for_status()
             except (httpx.HTTPError, KeyError, ValueError) as exc:

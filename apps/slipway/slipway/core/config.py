@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     # Confidential "slipway" client with a view-users service account. Slipway uses it to confirm that an API
     # token's owner is still enabled in Keycloak, and to read their current Slipway roles.
     oidc_client_id: str = "slipway"
+    # Keycloak's internal id of that client, fixed by the installer (realm file and configure-auth.mjs). The service
+    # account only has view-users, so it cannot look the client up; it needs the id to read a user's Slipway roles.
+    oidc_client_uuid: str = "99b9e3d0-8235-4b97-83c7-00765a790a6f"
     oidc_client_secret: str | None = None
     # How long a Keycloak lookup for an API-token owner is trusted before asking again.
     oidc_owner_cache_seconds: int = 60

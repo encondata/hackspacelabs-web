@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import time
 
 import httpx
@@ -211,7 +210,7 @@ async def test_api_tokens_cannot_mint_tokens_or_link_github(admin_client, make_c
 # ----------------------------------------------------------- Keycloak admin lookups
 
 
-SERVICE_TOKEN = "e30." + base64.urlsafe_b64encode(b'{"sub":"sa-user","azp":"slipway"}').decode().rstrip("=") + ".sig"
+SERVICE_TOKEN = "service-account-token"
 
 
 def _keycloak(handler) -> KeycloakAdmin:
@@ -227,16 +226,9 @@ async def test_owner_lookup_reads_enabled_flag_and_effective_roles():
         if path.endswith("/protocol/openid-connect/token"):
             assert b"grant_type=client_credentials" in request.content and b"client_id=slipway" in request.content
             return httpx.Response(200, json={"access_token": SERVICE_TOKEN, "expires_in": 300})
-        if path == "/admin/realms/hackspacelabs/users/sa-user/role-mappings":
-            return httpx.Response(200, json={
-                "clientMappings": {
-                    "realm-management": {"id": "rm-uuid", "client": "realm-management", "mappings": [{"name": "view-users"}]},
-                    "slipway": {"id": "client-uuid", "client": "slipway", "mappings": [{"name": "service-account"}]},
-                },
-            })
         if path == f"/admin/realms/hackspacelabs/users/{SUB}":
             return httpx.Response(200, json={"id": SUB, "username": "ada", "enabled": True, "firstName": "Ada", "lastName": "L"})
-        if path == f"/admin/realms/hackspacelabs/users/{SUB}/role-mappings/clients/client-uuid/composite":
+        if path == f"/admin/realms/hackspacelabs/users/{SUB}/role-mappings/clients/99b9e3d0-8235-4b97-83c7-00765a790a6f/composite":
             return httpx.Response(200, json=[{"name": "developer"}, {"name": "uma_protection"}])
         return httpx.Response(500)
 
@@ -310,14 +302,3 @@ async def test_system_info_needs_sign_in_and_reports_features(admin_client, make
     assert info["default_deploy_root"] == "/opt/slipway" and "version" in info
     assert (await make_client().get("/api/v1/system/info")).status_code == 401
 
-
-async def test_owner_lookup_fails_closed_without_the_marker_role():
-    def handler(request):
-        if request.url.path.endswith("/token"):
-            return httpx.Response(200, json={"access_token": SERVICE_TOKEN, "expires_in": 300})
-        if request.url.path.endswith("/users/sa-user/role-mappings"):
-            return httpx.Response(200, json={"clientMappings": {"realm-management": {"id": "rm", "mappings": []}}})
-        return httpx.Response(200, json={"id": SUB, "enabled": True})
-
-    with pytest.raises(oidc.IdentityUnavailable, match="rerun the installer"):
-        await _keycloak(handler).owner(SUB)

@@ -141,6 +141,7 @@
       ]
     },
     {
+      "id": "99b9e3d0-8235-4b97-83c7-00765a790a6f",
       "clientId": "slipway",
       "name": "Slipway",
       "description": "Deployment API behind the HackSpaceLabs gateway. Holds Slipway roles, accepts access tokens issued to hackspacelabs-web, and uses a read-only service account to check API-token owners.",

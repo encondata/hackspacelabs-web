@@ -78,9 +78,13 @@ const slipwayRoles={admin:"Slipway: full control, including users' tokens and au
 const slipwaySecret=process.env.SLIPWAY_OIDC_CLIENT_SECRET;
 if(!slipwaySecret||slipwaySecret.length<32)throw new Error('SLIPWAY_OIDC_CLIENT_SECRET is required');
 // Confidential, no browser flows. Its read-only service account lets Slipway confirm an API token's owner is still enabled.
+// Fixed internal id, also in the realm file and Slipway's settings (SLIPWAY_OIDC_CLIENT_UUID): with only view-users,
+// Slipway's service account cannot look its own client up, and Keycloak keeps an id chosen at creation.
+const slipwayClientUuid='99b9e3d0-8235-4b97-83c7-00765a790a6f';
 const slipwayRepresentation={clientId:'slipway',name:'Slipway',protocol:'openid-connect',enabled:true,bearerOnly:false,publicClient:false,clientAuthenticatorType:'client-secret',secret:slipwaySecret,standardFlowEnabled:false,directAccessGrantsEnabled:false,implicitFlowEnabled:false,serviceAccountsEnabled:true,fullScopeAllowed:false};
 let [slipway]=await api('/clients?clientId=slipway');
-if(!slipway){await api('/clients',{method:'POST',body:JSON.stringify(slipwayRepresentation)});[slipway]=await api('/clients?clientId=slipway')}
+if(!slipway){await api('/clients',{method:'POST',body:JSON.stringify({id:slipwayClientUuid,...slipwayRepresentation})});[slipway]=await api('/clients?clientId=slipway')}
+if(slipway.id!==slipwayClientUuid)throw new Error('The Keycloak client "slipway" has id '+slipway.id+', but Slipway expects '+slipwayClientUuid+'. Delete the slipway client in the Keycloak Admin Console (hackspacelabs realm) and rerun the installer; Slipway roles must then be assigned again.');
 else await api('/clients/'+slipway.id,{method:'PUT',body:JSON.stringify({...slipway,...slipwayRepresentation})});
 const presentRoles=new Set((await api('/clients/'+slipway.id+'/roles')).map(role=>role.name));
 for(const [name,description] of Object.entries(slipwayRoles))if(!presentRoles.has(name))await api('/clients/'+slipway.id+'/roles',{method:'POST',body:JSON.stringify({name,description})});
@@ -92,9 +96,6 @@ await api('/users/'+slipwayService.id+'/role-mappings/clients/'+realmAdmin.id,{m
 // through an explicit scope mapping; otherwise Keycloak rejects them with 401. No client access is granted.
 await api('/clients/'+slipway.id+'/default-client-scopes/'+adminScope.id,{method:'PUT'});
 await api('/clients/'+slipway.id+'/scope-mappings/clients/'+realmAdmin.id,{method:'POST',body:JSON.stringify(readOnly)});
-// Marker role so Slipway can find its own client id from its service account's role mappings (view-users only).
-if(!presentRoles.has('service-account'))await api('/clients/'+slipway.id+'/roles',{method:'POST',body:JSON.stringify({name:'service-account',description:'Internal: identifies Slipway\'s own service account. Grants nothing.'})});
-await api('/users/'+slipwayService.id+'/role-mappings/clients/'+slipway.id,{method:'POST',body:JSON.stringify([await api('/clients/'+slipway.id+'/roles/service-account')])});
 const slipwayRoleList=await Promise.all(Object.keys(slipwayRoles).map(name=>api('/clients/'+slipway.id+'/roles/'+name)));
 // The website client has fullScopeAllowed=false, so it may only carry Slipway roles it is scoped to.
 await api('/clients/'+client.id+'/scope-mappings/clients/'+slipway.id,{method:'POST',body:JSON.stringify(slipwayRoleList)});
