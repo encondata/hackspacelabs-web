@@ -32,10 +32,14 @@ assert.ok(![].concat(id.aud).includes('slipway'),'ID token is not addressed to S
 
 // Slipway's service account: client credentials work, the lookups Slipway makes are allowed, writes are not.
 const service=await token('hackspacelabs',{grant_type:'client_credentials',client_id:'slipway',client_secret:process.env.SLIPWAY_OIDC_CLIENT_SECRET});
-const [slipway]=await get('/clients?clientId=slipway',service);
+const [account]=await get('/users?username=service-account-slipway&exact=true',service);
+assert.ok(account?.serviceAccountClientId,'service account finds its own client id');
+const slipway={id:account.serviceAccountClientId};
 assert.equal((await get('/users/'+user.id,service)).enabled,true);
 const roles=await get(`/users/${user.id}/role-mappings/clients/${slipway.id}/composite`,service);
 assert.ok(roles.some(r=>r.name==='admin'),'service account sees effective Slipway roles');
 const write=await fetch(base+'/admin/realms/hackspacelabs/users/'+user.id,{method:'PUT',headers:{Authorization:'Bearer '+service,'Content-Type':'application/json'},body:JSON.stringify({enabled:false})});
 assert.equal(write.status,403,'Slipway service account is read-only');
+const clients=await fetch(base+'/admin/realms/hackspacelabs/clients/'+web.id+'/client-secret',{headers:{Authorization:'Bearer '+service}});
+assert.equal(clients.status,403,'Slipway service account cannot read client secrets');
 console.log('Keycloak issues the tokens Slipway expects, and Slipway\'s service account is read-only.');

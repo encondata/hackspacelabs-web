@@ -86,10 +86,11 @@ const presentRoles=new Set((await api('/clients/'+slipway.id+'/roles')).map(role
 for(const [name,description] of Object.entries(slipwayRoles))if(!presentRoles.has(name))await api('/clients/'+slipway.id+'/roles',{method:'POST',body:JSON.stringify({name,description})});
 const slipwayService=await api('/clients/'+slipway.id+'/service-account-user');
 const [realmAdmin]=await api('/clients?clientId=realm-management');
-const readOnly=await Promise.all(['view-users','query-clients'].map(name=>api('/clients/'+realmAdmin.id+'/roles/'+name)));
+const readOnly=await Promise.all(['view-users'].map(name=>api('/clients/'+realmAdmin.id+'/roles/'+name)));
 await api('/users/'+slipwayService.id+'/role-mappings/clients/'+realmAdmin.id,{method:'POST',body:JSON.stringify(readOnly)});
-// Its tokens must be addressed to the admin API (kc-admin-api) and, as fullScopeAllowed is false, carry these two
-// read-only roles through an explicit scope mapping; otherwise Keycloak rejects them with 401.
+// Its tokens must be addressed to the admin API (kc-admin-api) and, as fullScopeAllowed is false, carry view-users
+// through an explicit scope mapping; otherwise Keycloak rejects them with 401. No client access is granted: Slipway
+// finds its own client id through its service-account user.
 await api('/clients/'+slipway.id+'/default-client-scopes/'+adminScope.id,{method:'PUT'});
 await api('/clients/'+slipway.id+'/scope-mappings/clients/'+realmAdmin.id,{method:'POST',body:JSON.stringify(readOnly)});
 const slipwayRoleList=await Promise.all(Object.keys(slipwayRoles).map(name=>api('/clients/'+slipway.id+'/roles/'+name)));

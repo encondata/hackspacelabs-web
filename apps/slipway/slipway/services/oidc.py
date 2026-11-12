@@ -154,7 +154,7 @@ OwnerLookup = Callable[[str], Awaitable[OwnerStatus]]
 
 
 class KeycloakAdmin:
-    """Read-only Keycloak admin calls through Slipway's service account (role ``view-users``)."""
+    """Read-only Keycloak admin calls through Slipway's service account (realm-management role ``view-users`` only)."""
 
     def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self.transport = transport
@@ -192,12 +192,15 @@ class KeycloakAdmin:
                         return OwnerStatus(exists=False)
                     user.raise_for_status()
                     if self._slipway_client_id is None:
-                        found = await self._get(client, f"/clients?clientId={get_settings().oidc_audience}")
+                        # Slipway's own client id, read from its service-account user. view-users allows this; listing
+                        # clients would need view-clients, which also exposes other clients' configuration.
+                        username = f"service-account-{get_settings().oidc_client_id}".lower()
+                        found = await self._get(client, f"/users?username={quote(username, safe='')}&exact=true")
                         found.raise_for_status()
-                        matches = found.json()
+                        matches = [u for u in found.json() if u.get("serviceAccountClientId")]
                         if len(matches) != 1:
-                            raise IdentityUnavailable("Keycloak has no single 'slipway' client")
-                        self._slipway_client_id = str(matches[0]["id"])
+                            raise IdentityUnavailable("Keycloak has no service account for the Slipway client")
+                        self._slipway_client_id = quote(str(matches[0]["serviceAccountClientId"]), safe="")
                     # Effective roles, so roles granted through groups or composites count too.
                     mapped = await self._get(
                         client, f"/users/{quote(sub, safe='')}/role-mappings/clients/{self._slipway_client_id}/composite"
