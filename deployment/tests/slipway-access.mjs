@@ -32,24 +32,11 @@ assert.ok(![].concat(id.aud).includes('slipway'),'ID token is not addressed to S
 
 // Slipway's service account: client credentials work, the lookups Slipway makes are allowed, writes are not.
 const service=await token('hackspacelabs',{grant_type:'client_credentials',client_id:'slipway',client_secret:process.env.SLIPWAY_OIDC_CLIENT_SECRET});
-// Diagnostics: how this Keycloak exposes Slipway's own service-account user to each caller and query.
-const claims=JSON.parse(Buffer.from(service.split('.')[1],'base64url').toString());
-console.log('service token claims:',JSON.stringify({sub:claims.sub,azp:claims.azp,aud:claims.aud,scope:claims.scope,typ:claims.typ,resource_access:claims.resource_access}));
-async function probe(label,path,bearer){
-  const response=await fetch(base+'/admin/realms/hackspacelabs'+path,{headers:{Authorization:'Bearer '+bearer}});
-  let body=null;try{body=await response.json()}catch{}
-  const rows=Array.isArray(body)?body:body?[body]:[];
-  console.log('probe',label,response.status,JSON.stringify(rows.slice(0,5).map(u=>({username:u.username,id:u.id,serviceAccountClientId:u.serviceAccountClientId,keys:Object.keys(u).length}))));
-}
-for(const [who,bearer] of [['service',service],['admin',admin]]){
-  await probe(who+' search','/users?search=service-account-slipway&briefRepresentation=false&max=20',bearer);
-  await probe(who+' username-exact','/users?username=service-account-slipway&exact=true',bearer);
-  await probe(who+' username-exact-full','/users?username=service-account-slipway&exact=true&briefRepresentation=false',bearer);
-  if(claims.sub)await probe(who+' by-sub','/users/'+claims.sub,bearer);
-}
-const account=(await get('/users?search=service-account-slipway&briefRepresentation=false&max=20',service)).find(u=>u.username==='service-account-slipway');
-assert.ok(account?.serviceAccountClientId,'service account finds its own client id');
-const slipway={id:account.serviceAccountClientId};
+// Slipway finds its own client id from its service account's direct role mappings (marker role service-account).
+const own=JSON.parse(Buffer.from(service.split('.')[1],'base64url').toString()).sub;
+assert.ok(own,'service token names its user');
+const slipway=(await get('/users/'+own+'/role-mappings',service)).clientMappings?.slipway;
+assert.ok(slipway?.id,'service account finds its own client id through the marker role');
 assert.equal((await get('/users/'+user.id,service)).enabled,true);
 const roles=await get(`/users/${user.id}/role-mappings/clients/${slipway.id}/composite`,service);
 assert.ok(roles.some(r=>r.name==='admin'),'service account sees effective Slipway roles');
