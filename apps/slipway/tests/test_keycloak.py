@@ -224,8 +224,11 @@ async def test_owner_lookup_reads_enabled_flag_and_effective_roles():
             assert b"grant_type=client_credentials" in request.content and b"client_id=slipway" in request.content
             return httpx.Response(200, json={"access_token": "svc", "expires_in": 300})
         if path == "/admin/realms/hackspacelabs/users":
-            assert request.url.params["username"] == "service-account-slipway" and request.url.params["exact"] == "true"
-            return httpx.Response(200, json=[{"id": "sa-user", "username": "service-account-slipway", "serviceAccountClientId": "client-uuid"}])
+            assert request.url.params["search"] == "service-account-slipway"
+            return httpx.Response(200, json=[
+                {"id": "other", "username": "service-account-slipway-old", "serviceAccountClientId": "wrong"},
+                {"id": "sa-user", "username": "service-account-slipway", "serviceAccountClientId": "client-uuid"},
+            ])
         if path == f"/admin/realms/hackspacelabs/users/{SUB}":
             return httpx.Response(200, json={"id": SUB, "username": "ada", "enabled": True, "firstName": "Ada", "lastName": "L"})
         if path == f"/admin/realms/hackspacelabs/users/{SUB}/role-mappings/clients/client-uuid/composite":

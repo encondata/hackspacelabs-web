@@ -193,11 +193,12 @@ class KeycloakAdmin:
                     user.raise_for_status()
                     if self._slipway_client_id is None:
                         # Slipway's own client id, read from its service-account user. view-users allows this; listing
-                        # clients would need view-clients, which also exposes other clients' configuration.
+                        # clients would need view-clients, which also exposes other clients' configuration. Keycloak's
+                        # field searches (?username=) leave service accounts out; the free-text ?search= includes them.
                         username = f"service-account-{get_settings().oidc_client_id}".lower()
-                        found = await self._get(client, f"/users?username={quote(username, safe='')}&exact=true")
+                        found = await self._get(client, f"/users?search={quote(username, safe='')}&briefRepresentation=false&max=20")
                         found.raise_for_status()
-                        matches = [u for u in found.json() if u.get("serviceAccountClientId")]
+                        matches = [u for u in found.json() if u.get("username") == username and u.get("serviceAccountClientId")]
                         if len(matches) != 1:
                             raise IdentityUnavailable("Keycloak has no service account for the Slipway client")
                         self._slipway_client_id = quote(str(matches[0]["serviceAccountClientId"]), safe="")

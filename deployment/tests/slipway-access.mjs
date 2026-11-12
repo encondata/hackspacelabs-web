@@ -32,7 +32,7 @@ assert.ok(![].concat(id.aud).includes('slipway'),'ID token is not addressed to S
 
 // Slipway's service account: client credentials work, the lookups Slipway makes are allowed, writes are not.
 const service=await token('hackspacelabs',{grant_type:'client_credentials',client_id:'slipway',client_secret:process.env.SLIPWAY_OIDC_CLIENT_SECRET});
-const [account]=await get('/users?username=service-account-slipway&exact=true',service);
+const account=(await get('/users?search=service-account-slipway&briefRepresentation=false&max=20',service)).find(u=>u.username==='service-account-slipway');
 assert.ok(account?.serviceAccountClientId,'service account finds its own client id');
 const slipway={id:account.serviceAccountClientId};
 assert.equal((await get('/users/'+user.id,service)).enabled,true);
