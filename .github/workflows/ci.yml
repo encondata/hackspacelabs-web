@@ -46,10 +46,10 @@ jobs:
         run: bash deployment/tests/docker-startup.sh
       - name: Build Keycloak image
         run: docker build -f deployment/keycloak/Dockerfile -t hackspacelabs-auth:ci deployment
-      - name: Verify existing Keycloak realm migration and LAN login
-        run: bash deployment/tests/keycloak-lan.sh
       - name: Build Slipway image
         run: docker build -t hackspacelabs-slipway:ci apps/slipway
+      - name: Verify existing Keycloak realm migration and LAN login
+        run: bash deployment/tests/keycloak-lan.sh
   slipway:
     runs-on: ubuntu-latest
     timeout-minutes: 15
