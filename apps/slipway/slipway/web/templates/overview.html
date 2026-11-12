@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, badge, meter, stat, empty, repo_icon %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+{% set can_repos = auth.can(Perm.REPOS_READ) %}
+{% set can_hosts = auth.can(Perm.HOSTS_READ) %}
+{% set can_instances = auth.can(Perm.INSTANCES_READ) %}
+{% set can_deps = auth.can(Perm.DEPLOYMENTS_READ) %}
+<div class="page-head">
+  <div>
+    <h1>{{ greeting }}, {{ user.display_name.split(" ")[0] }} 👋</h1>
+    <p class="lede">Here's what's happening with your apps on Slipway.</p>
+  </div>
+  <div class="actions">
+    {% if auth.can(Perm.REPOS_SYNC) and user.github %}
+    <button class="btn" data-api="POST /api/v1/repositories/sync" data-success="Repositories synced from GitHub" data-then="reload">{{ icon("github") }} Sync GitHub</button>
+    {% endif %}
+    {# The add-host dialog lives on /hosts, which needs hosts:read. #}
+    {% if can_hosts and auth.can(Perm.HOSTS_WRITE) %}<a class="btn" href="/hosts?add=1">{{ icon("plus") }} Add Host</a>{% endif %}
+    {% if auth.can(Perm.INSTANCES_WRITE) %}<a class="btn btn-primary" href="/instances/new">{{ icon("rocket") }} New Deployment</a>{% endif %}
+  </div>
+</div>
+
+{% if can_repos or can_instances or can_hosts or can_deps %}
+<div class="grid grid-4">
+  {% if can_repos %}
+  {% call stat("repositories", "GitHub Repos", stats.repos, "/repositories") %}<span>{{ stats.deployable }} Docker-ready</span>{% endcall %}
+  {% endif %}
+  {% if can_instances %}
+  {% call stat("instances", "Active Instances", stats.running, "/instances") %}<span>of {{ stats.instances }} configured</span>{% endcall %}
+  {% endif %}
+  {% if can_hosts %}
+  {% call stat("hosts", "Docker Hosts", stats.hosts, "/hosts") %}
+    <span class="row" style="gap:6px"><span class="dot success"></span>{{ stats.healthy }} healthy</span>
+    {% if stats.warning %}<span class="row" style="gap:6px"><span class="dot warning"></span>{{ stats.warning }} need attention</span>{% endif %}
+  {% endcall %}
+  {% endif %}
+  {% if can_deps %}
+  {% call stat("rocket", "Deployments Today", stats.today, "/deployments") %}
+    {% if stats.today_failed %}<span class="bad">{{ stats.today_failed }} failed</span>{% else %}<span>{{ "All succeeded" if stats.today else "None yet today" }}</span>{% endif %}
+  {% endcall %}
+  {% endif %}
+</div>
+{% endif %}
+
+{% if can_repos or can_hosts %}
+<div class="grid grid-main">
+  {% if can_repos %}
+  <section class="card">
+    <div class="card-head">
+      <span class="head-icon">{{ icon("repositories", "i-lg") }}</span>
+      <div><h2>Recent Repositories</h2><p>Your GitHub repositories, their latest activity, and deployment status.</p></div>
+      <span class="spacer"></span>
+      <a class="link-more" href="/repositories">View All {{ icon("arrow-right", "i-sm") }}</a>
+    </div>
+    {% if repos %}
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Repository</th><th>Branch</th><th>Last Push</th>{% if can_instances %}<th>Deployment</th>{% endif %}</tr></thead>
+      <tbody>
+      {% for r in repos %}{% set s = summaries[r.id] %}
+        <tr>
+          <td><a class="primary-cell" href="/repositories?repo={{ r.id }}" style="color:inherit">{{ repo_icon(r) }}<span class="truncate"><strong>{{ r.name }}</strong><small>{{ r.full_name }}</small></span></a></td>
+          <td><span class="chip">{{ icon("branch", "i-sm") }} {{ r.default_branch }}</span></td>
+          <td class="muted nowrap">{{ r.pushed_at|timeago }}</td>
+          {% if can_instances %}<td>{{ badge("repo", s.state) }}{% if s.sha %}<div class="subtle mono">{{ s.sha }}</div>{% endif %}</td>{% endif %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}
+      {% if user.github %}
+        {% call empty("repositories", "No repositories yet", "Sync from GitHub to see your repositories here.") %}
+          {% if auth.can(Perm.REPOS_SYNC) %}<button class="btn btn-primary" data-api="POST /api/v1/repositories/sync" data-success="Repositories synced" data-then="reload">{{ icon("sync") }} Sync now</button>{% endif %}
+        {% endcall %}
+      {% else %}
+        {% call empty("github", "Connect GitHub", "Link your GitHub account so Slipway can list and deploy your repositories.") %}
+          {% if settings.github_enabled %}<a class="btn btn-primary" href="/auth/github/link">{{ icon("github") }} Connect GitHub</a>{% else %}<p class="subtle">Set <code>SLIPWAY_GITHUB_CLIENT_ID</code> and <code>SLIPWAY_GITHUB_CLIENT_SECRET</code> first.</p>{% endif %}
+        {% endcall %}
+      {% endif %}
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if can_hosts %}
+  <section class="card">
+    <div class="card-head">
+      <span class="head-icon">{{ icon("hosts", "i-lg") }}</span>
+      <div><h2>Docker Hosts</h2><p>Available Docker hosts and their current health.</p></div>
+      <span class="spacer"></span>
+      <a class="link-more" href="/hosts">View All {{ icon("arrow-right", "i-sm") }}</a>
+    </div>
+    {% if hosts %}
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Host</th><th>Health</th><th>CPU</th><th>RAM</th></tr></thead>
+      <tbody>
+      {% for h in hosts %}
+        <tr>
+          <td><a class="primary-cell" href="/hosts/{{ h.id }}" style="color:inherit"><span class="truncate"><strong>{{ h.name }}</strong><small class="mono">{{ h.address }}</small></span></a></td>
+          <td>{{ badge("host", h.status) }}</td>
+          <td>{% if h.metrics.cpu_percent is defined %}{{ meter("CPU", h.metrics.cpu_percent) }}{% else %}<span class="subtle">—</span>{% endif %}</td>
+          <td>{% if h.metrics.mem_percent is defined %}{{ meter("RAM", h.metrics.mem_percent) }}{% else %}<span class="subtle">—</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}
+      {{ empty("hosts", "No hosts yet", "Add a Linux machine running Docker. Slipway connects to it over SSH.", "/hosts?add=1" if auth.can(Perm.HOSTS_WRITE) else None, "Add host") }}
+    {% endif %}
+  </section>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="grid grid-main">
+  {% if can_deps %}
+  <section class="card">
+    <div class="card-head">
+      <span class="head-icon accent">{{ icon("rocket", "i-lg") }}</span>
+      <div><h2>Deployment Activity</h2><p>A timeline of recent deployments across your projects.</p></div>
+      <span class="spacer"></span>
+      <a class="link-more" href="/deployments">View All {{ icon("arrow-right", "i-sm") }}</a>
+    </div>
+    {% if recent %}
+    <ul class="timeline">
+      {% for d in recent %}
+      {% set kind = {"succeeded": "success", "failed": "error", "running": "warning", "queued": "warning"}.get(d.status, "") %}
+      <li>
+        <span class="tl-icon {{ kind }}">{{ icon({"succeeded": "check", "failed": "x"}.get(d.status, "clock")) }}</span>
+        <a href="/deployments/{{ d.id }}" style="color:inherit">
+          {% if can_hosts %}
+          <div class="tl-title">{{ d.instance.name }}<span>{{ {"succeeded": "Deployed to", "failed": "Failed on", "running": "Building on", "queued": "Queued for", "cancelled": "Cancelled on"}.get(d.status, "") }} {{ d.instance.host.name }}</span></div>
+          {% else %}
+          <div class="tl-title">{{ d.instance.name }}<span>{{ {"succeeded": "Deployed", "failed": "Failed", "running": "Building", "queued": "Queued", "cancelled": "Cancelled"}.get(d.status, "") }}</span></div>
+          {% endif %}
+          <div class="tl-meta">{{ d.branch }}{% if d.short_sha %} · <span class="mono">{{ d.short_sha }}</span>{% endif %}{% if d.commit_message %} · {{ d.commit_message|truncate(60) }}{% endif %}</div>
+        </a>
+        <time>{{ d.created_at|timeago }}</time>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+      {{ empty("rocket", "No deployments yet", "Create an instance from a repository to run your first deployment.", "/instances/new" if auth.can(Perm.INSTANCES_WRITE) else None, "Create instance") }}
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if not setup_done %}
+  <section class="card">
+    <div class="card-head">
+      <span class="head-icon accent">{{ icon("check", "i-lg") }}</span>
+      <div><h2>Getting started</h2><p>A few steps to your first deployment.</p></div>
+    </div>
+    <ol class="checklist">
+      {% for label, done, href in steps %}
+      <li class="{{ 'done' if done }}"><a href="{{ href }}"><span class="tick">{{ icon("check") }}</span><span>{{ label }}</span><span class="go">{{ icon("chevron-right", "i-sm") }}</span></a></li>
+      {% endfor %}
+    </ol>
+  </section>
+  {% else %}
+  <section class="card">
+    <div class="card-head">
+      <span class="head-icon accent">{{ icon("analytics", "i-lg") }}</span>
+      <div><h2>Mobile Analytics &amp; Logs</h2><p>Sessions, crashes and live logs from your Android, iOS and web apps.</p></div>
+    </div>
+    {{ empty("mobile", "Coming soon", "Analytics ingestion and live log streaming will appear here once the SDK endpoints are added.") }}
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

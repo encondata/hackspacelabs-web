@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, badge, meter, empty %}
+{% block title %}Hosts{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Hosts</h1>
+    <p class="lede">Linux machines running Docker. Slipway reaches them over SSH and pins each host key on first contact.</p>
+  </div>
+  <div class="actions">
+    {% if auth.can(Perm.HOSTS_WRITE) %}<button class="btn btn-primary" data-open="add-host">{{ icon("plus") }} Add Host</button>{% endif %}
+  </div>
+</div>
+
+<section class="card">
+  {% if hosts %}
+  {% set can_instances = auth.can(Perm.INSTANCES_READ) %}
+  <div class="table-wrap"><table class="table">
+    <thead><tr><th>Host</th><th>Environment</th><th>Health</th><th>CPU</th><th>RAM</th><th>Docker</th>{% if can_instances %}<th>Instances</th>{% endif %}<th>Checked</th><th class="num">Actions</th></tr></thead>
+    <tbody>
+    {% for h in hosts %}
+      <tr>
+        <td><a class="primary-cell" href="/hosts/{{ h.id }}" style="color:inherit"><span class="row-icon">{{ icon("hosts") }}</span><span><strong>{{ h.name }}</strong><small class="mono">{{ h.username }}@{{ h.address }}</small></span></a></td>
+        <td>{% if h.environment %}<span class="chip">{{ h.environment }}</span>{% else %}<span class="subtle">—</span>{% endif %}</td>
+        <td>{{ badge("host", h.status) }}</td>
+        <td>{% if h.metrics.cpu_percent is defined %}{{ meter("CPU", h.metrics.cpu_percent) }}{% else %}<span class="subtle">—</span>{% endif %}</td>
+        <td>{% if h.metrics.mem_percent is defined %}{{ meter("RAM", h.metrics.mem_percent) }}{% else %}<span class="subtle">—</span>{% endif %}</td>
+        <td class="mono subtle">{{ h.docker_version or "—" }}</td>
+        {% if can_instances %}<td>{{ counts.get(h.id, 0) }}</td>{% endif %}
+        <td class="muted nowrap">{{ h.last_checked_at|timeago }}</td>
+        <td class="actions-cell">
+          {% if h.is_pinned or auth.can(Perm.HOSTS_WRITE) %}
+          <button class="btn btn-sm" data-api="POST /api/v1/hosts/{{ h.id }}/check" data-success="Health check finished" data-then="reload">{{ icon("activity", "i-sm") }} {{ "Check" if h.is_pinned else "Verify" }}</button>
+          {% endif %}
+          <a class="btn btn-sm" href="/hosts/{{ h.id }}">Details</a>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+    {% call empty("hosts", "No hosts yet", "Add a Linux machine running Docker. Slipway generates an SSH key for it, you add the public key to the host, and Slipway verifies the connection.") %}
+      {% if auth.can(Perm.HOSTS_WRITE) %}<button class="btn btn-primary" data-open="add-host">{{ icon("plus") }} Add host</button>{% endif %}
+    {% endcall %}
+  {% endif %}
+</section>
+
+{% if auth.can(Perm.HOSTS_WRITE) %}
+<dialog class="modal" id="add-host" data-open-on="add" style="width: min(680px, calc(100vw - 32px))">
+  <form method="post" action="/js-required" data-form="POST /api/v1/hosts" data-then="redirect:/hosts/{id}" data-success="Host added">
+    <div class="modal-head"><h2>Add a Docker host</h2><button class="icon-btn" type="button" data-close aria-label="Close">{{ icon("x") }}</button></div>
+    <div class="modal-body">{% with h = None %}{% include "_host_fields.html" %}{% endwith %}</div>
+    <div class="modal-foot"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Add host</button></div>
+  </form>
+</dialog>
+{% endif %}
+{% endblock %}
