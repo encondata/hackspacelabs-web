@@ -294,3 +294,10 @@ async def test_login_helper_matches_keycloak(client):
     # The conftest helper behaves like the gateway: the token carries the account's Keycloak roles.
     await make_user("dev@example.com", roles=["developer"])
     assert (await login(client, "dev@example.com"))["user"]["roles"] == ["developer"]
+
+
+async def test_system_info_needs_sign_in_and_reports_features(admin_client, make_client):
+    info = (await admin_client.get("/api/v1/system/info")).json()
+    assert info["github_enabled"] is True and info["github_service_token"] is False
+    assert info["default_deploy_root"] == "/opt/slipway" and "version" in info
+    assert (await make_client().get("/api/v1/system/info")).status_code == 401

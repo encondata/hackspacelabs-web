@@ -22,13 +22,17 @@ const segment=v=>{if(typeof v!=='string'||!v||/[\s/\\?#%]/.test(v)||v==='.'||v==
 const names=v=>{if(!Array.isArray(v)||v.length>100||v.some(x=>typeof x!=='string'||!x||x.length>255))fail('Invalid list');return [...new Set(v)]};
 const bool=v=>{if(typeof v!=='boolean')fail('Expected true or false');return v};
 const userView=u=>({id:u.id,username:u.username,firstName:u.firstName||'',lastName:u.lastName||'',email:u.email||'',enabled:u.enabled,requiredActions:u.requiredActions||[]});
-const protectedClients=new Set(['hackspacelabs-web','hackspacelabs-management','account','account-console','admin-cli','broker','realm-management','security-admin-console']);
+const protectedClients=new Set(['hackspacelabs-web','hackspacelabs-management','slipway','account','account-console','admin-cli','broker','realm-management','security-admin-console']);
 export const settingFields=['displayName','passwordPolicy','registrationAllowed','rememberMe','bruteForceProtected','accessTokenLifespan','ssoSessionIdleTimeout','ssoSessionMaxLifespan'];
 export function managementRouter({api,userFor,config,log=console}){
  const router=express.Router();
  let portalClientId;
  async function portalClient(){if(!portalClientId){const clients=await api('/clients?clientId=hackspacelabs-web');if(clients.length!==1)throw new Error('Portal client unavailable');portalClientId=segment(clients[0].id)}return portalClientId}
  async function rolePath(){return '/role-mappings/clients/'+await portalClient()}
+ // Roles of embedded apps (Keycloak clients the installer creates). Absent clients simply have no roles.
+ const appClients={slipway:'slipway'};const appClientIds={};
+ async function appClient(app){if(!Object.hasOwn(appClients,app))fail('Unknown app');if(!appClientIds[app]){const clients=await api('/clients?clientId='+encodeURIComponent(appClients[app]));if(clients.length!==1)return null;appClientIds[app]=segment(clients[0].id)}return appClientIds[app]}
+ async function appRolesOf(path){const id=await appClient('slipway');return {slipway:id?await api(path+'/role-mappings/clients/'+id):[]}}
 
  router.use(async(req,res,next)=>{
   const user=await userFor(req,res);if(!user)return res.status(401).json({error:'Please sign in again.'});
@@ -48,7 +52,7 @@ export function managementRouter({api,userFor,config,log=console}){
  const audit=(req,action)=>log.info?.('Identity administration',{actor:req.actor.id,action,target:req.params.id||req.params.name||'realm'});
  router.get('/users',async(req,res)=>{const search=typeof req.query.search==='string'?req.query.search.slice(0,200):'';res.json((await page('/users?search='+encodeURIComponent(search),req.query)).filter(u=>!u.serviceAccountClientId).map(userView))});
  router.post('/users',async(req,res)=>{const username=text(req.body.username,'username',true);const password=req.body.password;if(typeof password!=='string'||!password||password.length>4096)fail('Enter a password.');await api('/users','POST',{username,enabled:true,credentials:[{type:'password',value:password,temporary:true}],requiredActions:['UPDATE_PASSWORD']});audit(req,'create user');res.status(201).json({ok:true})});
- router.get('/users/:id',async(req,res)=>{const p='/users/'+segment(req.params.id);const [user,groups,roles,sessions]=await Promise.all([api(p),api(p+'/groups?max=100'),api(p+await rolePath()),api(p+'/sessions')]);res.json({...userView(user),groups,roles,sessions})});
+ router.get('/users/:id',async(req,res)=>{const p='/users/'+segment(req.params.id);const [user,groups,roles,sessions,appRoles]=await Promise.all([api(p),api(p+'/groups?max=100'),api(p+await rolePath()),api(p+'/sessions'),appRolesOf(p)]);res.json({...userView(user),groups,roles,sessions,appRoles})});
  router.put('/users/:id',async(req,res)=>{const data={firstName:text(req.body.firstName,'first name'),lastName:text(req.body.lastName,'last name'),email:text(req.body.email,'email'),enabled:bool(req.body.enabled)};if(req.params.id===req.actor.id&&!data.enabled)fail('You cannot disable your own account.');await api('/users/'+segment(req.params.id),'PUT',data);if(!data.enabled)await api('/users/'+segment(req.params.id)+'/logout','POST');audit(req,'update user');res.json({ok:true})});
  router.post('/users/:id/password',async(req,res)=>{const password=req.body.password;if(typeof password!=='string'||!password||password.length>4096)fail('Enter a password.');await api('/users/'+segment(req.params.id)+'/reset-password','PUT',{type:'password',value:password,temporary:true});await api('/users/'+segment(req.params.id)+'/logout','POST');audit(req,'reset password');res.json({ok:true})});
  router.post('/users/:id/logout',async(req,res)=>{await api('/users/'+segment(req.params.id)+'/logout','POST');audit(req,'revoke user sessions');res.json({ok:true})});
@@ -61,11 +65,22 @@ export function managementRouter({api,userFor,config,log=console}){
    if(add.length)await api(path,'POST',add);if(remove.length)await api(path,'DELETE',remove);audit(req,'update '+kind+' roles');res.json({ok:true});
   });
  }
+ for(const kind of ['users','groups']){
+  router.put('/'+kind+'/:id/app-roles/:app',async(req,res)=>{
+   const id=await appClient(req.params.app);if(!id)return res.status(404).json({error:'This app is not installed.'});
+   const available=await api('/clients/'+id+'/roles');const wantedNames=names(req.body.roles);
+   if(wantedNames.some(n=>!available.some(r=>r.name===n)))fail('Unknown app role');
+   const path='/'+kind+'/'+segment(req.params.id)+'/role-mappings/clients/'+id;const current=await api(path);
+   const add=available.filter(r=>wantedNames.includes(r.name)&&!current.some(c=>c.id===r.id));const remove=current.filter(r=>!wantedNames.includes(r.name));
+   if(add.length)await api(path,'POST',add);if(remove.length)await api(path,'DELETE',remove);audit(req,'update '+req.params.app+' roles for '+kind.slice(0,-1));res.json({ok:true});
+  });
+ }
+ router.get('/apps/:app/roles',async(req,res)=>{const id=await appClient(req.params.app);res.json(id?await api('/clients/'+id+'/roles'):[])});
  router.put('/users/:id/groups/:group',async(req,res)=>{await api('/users/'+segment(req.params.id)+'/groups/'+segment(req.params.group),'PUT');audit(req,'join group');res.json({ok:true})});
  router.delete('/users/:id/groups/:group',async(req,res)=>{if(req.params.id===req.actor.id)fail('Use another administrator to change your own group membership.');await api('/users/'+segment(req.params.id)+'/groups/'+segment(req.params.group),'DELETE');audit(req,'leave group');res.json({ok:true})});
  router.get('/groups',async(req,res)=>res.json(await page('/groups?search='+encodeURIComponent(String(req.query.search||'')),req.query)));
  router.post('/groups',async(req,res)=>{await api('/groups','POST',{name:text(req.body.name,'group name',true)});audit(req,'create group');res.status(201).json({ok:true})});
- router.get('/groups/:id',async(req,res)=>{const p='/groups/'+segment(req.params.id);const [group,members,roles]=await Promise.all([api(p),page(p+'/members',req.query),api(p+await rolePath())]);res.json({...group,members:members.map(userView),roles})});
+ router.get('/groups/:id',async(req,res)=>{const p='/groups/'+segment(req.params.id);const [group,members,roles,appRoles]=await Promise.all([api(p),page(p+'/members',req.query),api(p+await rolePath()),appRolesOf(p)]);res.json({...group,members:members.map(userView),roles,appRoles})});
  router.put('/groups/:id',async(req,res)=>{await api('/groups/'+segment(req.params.id),'PUT',{name:text(req.body.name,'group name',true)});audit(req,'rename group');res.json({ok:true})});
  router.get('/roles',async(_req,res)=>res.json(await api('/clients/'+await portalClient()+'/roles')));
  router.post('/roles',async(req,res)=>{await api('/clients/'+await portalClient()+'/roles','POST',{name:text(req.body.name,'role name',true),description:text(req.body.description||'','description')});audit(req,'create role');res.status(201).json({ok:true})});

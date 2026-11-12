@@ -12,7 +12,7 @@ before(async()=>{issuer=await startIssuer();config={production:false,origin:'htt
 after(()=>issuer.close());
 async function fixture(role='admin'){
  issuer.state.roles=[role];const calls=[];const state={admin:true};
- const api=async(route,method='GET',body)=>{calls.push({route,method,body});if(route==='/clients?clientId=hackspacelabs-web')return [{id:'web-client'}];if(route==='/users/u')return {id:'u',enabled:true};if(route==='/users/sample-user')return {id:'sample-user',enabled:true};if(route.endsWith('/composite'))return state.admin?[{name:'admin'}]:[];if(route==='/clients/internal')return {clientId:'hackspacelabs-web',secret:'hidden'};if(route==='/clients/app')return {clientId:'test-app',secret:'hidden',redirectUris:['https://app.example/callback']};if(route.startsWith('/clients/web-client/roles/'))return {id:route.split('/').pop(),name:route.split('/').pop()};if(route.includes('role-mappings'))return [{id:'admin',name:'admin'}];if(route.startsWith('/users?'))return [{id:'u',username:'jim',enabled:true,credentials:[{secret:'nope'}]}];return null};
+ const api=async(route,method='GET',body)=>{calls.push({route,method,body});if(route==='/clients?clientId=hackspacelabs-web')return [{id:'web-client'}];if(route==='/clients?clientId=slipway')return state.slipway===false?[]:[{id:'slipway-client'}];if(route==='/clients/slipway-client/roles')return ['admin','maintainer','developer','viewer'].map(n=>({id:'sw-'+n,name:n,description:'Slipway: '+n}));if(route.endsWith('/role-mappings/clients/slipway-client'))return [{id:'sw-viewer',name:'viewer'}];if(route==='/users/u')return {id:'u',enabled:true};if(route==='/users/sample-user')return {id:'sample-user',enabled:true};if(route.endsWith('/composite'))return state.admin?[{name:'admin'}]:[];if(route==='/clients/internal')return {clientId:'hackspacelabs-web',secret:'hidden'};if(route==='/clients/sw')return {clientId:'slipway',secret:'hidden'};if(route==='/clients/app')return {clientId:'test-app',secret:'hidden',redirectUris:['https://app.example/callback']};if(route.startsWith('/clients/web-client/roles/'))return {id:route.split('/').pop(),name:route.split('/').pop()};if(route.includes('role-mappings'))return [{id:'admin',name:'admin'}];if(route.startsWith('/users?'))return [{id:'u',username:'jim',enabled:true,credentials:[{secret:'nope'}]}];return null};
  const app=createApp({config,store:new session.MemoryStore(),oidc,management:api,publicDir:'.',log:{error(){},info(){}}});const agent=request.agent(app);
  const start=await agent.get('/api/auth/login');const redirect=await fetch(start.headers.location,{redirect:'manual'});const url=new URL(redirect.headers.get('location'));await agent.get(url.pathname+url.search);const result=await agent.get('/api/auth/session');
  return {agent,app,calls,state,mutate:(method,path,body)=>agent[method]('/api/admin'+path).set('Origin',config.origin).set('x-csrf-token',result.body.csrfToken).send(body)};
@@ -25,3 +25,33 @@ test('internal clients cannot be changed and GET never returns secrets',async()=
 test('client creation validates callbacks and fixes code+PKCE flow',async()=>{const f=await fixture();const body={clientId:'new',enabled:true,publicClient:false,redirectUris:['https://app.example/callback'],webOrigins:['https://app.example']};assert.equal((await f.mutate('post','/clients',{...body,redirectUris:['https://app.example/*']})).status,400);assert.equal((await f.mutate('post','/clients',body)).status,201);const saved=f.calls.find(c=>c.route==='/clients'&&c.method==='POST').body;assert.equal(saved.attributes['pkce.code.challenge.method'],'S256');assert.equal(saved.directAccessGrantsEnabled,false)});
 test('settings accept removal of password policy but ignore unexposed server settings',async()=>{const f=await fixture();assert.equal((await f.mutate('put','/settings',{passwordPolicy:'',smtpServer:{host:'evil'},enabled:false})).status,200);assert.deepEqual(f.calls.find(c=>c.route===''&&c.method==='PUT').body,{passwordPolicy:''});assert.equal((await f.mutate('put','/settings',{accessTokenLifespan:-5})).status,400)});
 test('management token is server-only, cached and refreshed after expiry',async()=>{let requests=[];const api=createManagement(config,{fetcher:async(url,options)=>{requests.push({url,options});return url.endsWith('/token')?new Response(JSON.stringify({access_token:'service-token',expires_in:60})):new Response('[]')}});await api('/users');await api('/groups');assert.equal(requests.filter(r=>r.url.endsWith('/token')).length,1);assert.equal(requests[1].options.headers.Authorization,'Bearer service-token');assert.equal(requests[0].options.body.get('grant_type'),'client_credentials');assert.notEqual(requests[0].options.body.get('client_secret'),config.clientSecret)});
+
+test('Slipway roles are listed, shown on users and changed by diff',async()=>{
+ const f=await fixture();
+ const roles=await f.agent.get('/api/admin/apps/slipway/roles');assert.equal(roles.status,200);assert.deepEqual(roles.body.map(r=>r.name),['admin','maintainer','developer','viewer']);
+ const user=await f.agent.get('/api/admin/users/u');assert.deepEqual(user.body.appRoles.slipway.map(r=>r.name),['viewer']);
+ assert.equal((await f.mutate('put','/users/u/app-roles/slipway',{roles:['developer']})).status,200);
+ const writes=f.calls.filter(c=>c.route==='/users/u/role-mappings/clients/slipway-client'&&c.method!=='GET');
+ assert.deepEqual(writes.map(c=>[c.method,c.body.map(r=>r.name)]),[['POST',['developer']],['DELETE',['viewer']]]);
+ assert.equal((await f.mutate('put','/groups/g/app-roles/slipway',{roles:['viewer']})).status,200);
+});
+test('Slipway role changes reject unknown roles, unknown apps, missing CSRF and non-admins',async()=>{
+ const f=await fixture();
+ assert.equal((await f.mutate('put','/users/u/app-roles/slipway',{roles:['root']})).status,400);
+ assert.equal((await f.mutate('put','/users/u/app-roles/other',{roles:['admin']})).status,400);
+ assert.equal((await f.agent.put('/api/admin/users/u/app-roles/slipway').send({roles:['admin']})).status,403);
+ assert.ok(!f.calls.some(c=>c.method==='POST'&&c.route.includes('slipway-client')));
+ const customer=await fixture('customer');assert.equal((await customer.mutate('put','/users/u/app-roles/slipway',{roles:['admin']})).status,403);
+});
+test('without a Slipway client the role list is empty and changes are refused',async()=>{
+ const f=await fixture();f.state.slipway=false;
+ assert.deepEqual((await f.agent.get('/api/admin/apps/slipway/roles')).body,[]);
+ assert.deepEqual((await f.agent.get('/api/admin/users/u')).body.appRoles,{slipway:[]});
+ assert.equal((await f.mutate('put','/users/u/app-roles/slipway',{roles:['viewer']})).status,404);
+});
+test('the Slipway client is protected from edits in Connected apps',async()=>{
+ const f=await fixture();
+ assert.equal((await f.mutate('put','/clients/sw',{clientId:'slipway',enabled:true,publicClient:false,redirectUris:['https://x.example/cb'],webOrigins:[]})).status,400);
+ assert.equal((await f.mutate('post','/clients/sw/secret',{rotate:true})).status,400);
+ assert.ok(!f.calls.some(c=>c.route==='/clients/sw'&&c.method!=='GET'));
+});

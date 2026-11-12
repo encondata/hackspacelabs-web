@@ -20,6 +20,8 @@ jobs:
             selfhost/package-lock.json
       - run: npm ci
       - run: npm ci --prefix selfhost
+      - name: Type-check the frontend
+        run: npx tsc --noEmit -p .
       - run: npm run build
       - run: npm test
       - run: python3 deployment/tests/test_installer.py
