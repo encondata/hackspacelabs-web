@@ -38,7 +38,7 @@ jobs:
           TOKEN_ENCRYPTION_KEY: ci-placeholder
           SLIPWAY_DB_PASSWORD: ci-placeholder
           SLIPWAY_SECRET_KEY: ci-placeholder
-          SLIPWAY_OIDC_CLIENT_SECRET: ci-placeholder
+          SLIPWAY_INTERNAL_SECRET: ci-placeholder
           SLIPWAY_ENCRYPTION_KEY: ci-placeholder
       - name: Build web image
         run: docker build -f deployment/Dockerfile -t hackspacelabs-web:ci .

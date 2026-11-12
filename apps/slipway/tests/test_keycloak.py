@@ -10,11 +10,11 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy import select
 
-from slipway.core.config import Settings
+from slipway.core.config import Settings, get_settings
 from slipway.db.session import get_sessionmaker
 from slipway.models import KEYCLOAK, AuditEvent, OAuthAccount, User
 from slipway.services import oidc
-from slipway.services.oidc import KeycloakAdmin, OwnerStatus
+from slipway.services.oidc import GatewayOwners, OwnerStatus
 from tests.conftest import JWKS, KEYCLOAK_ACCOUNTS, access_token, login, make_user, set_keycloak_roles, sub_for
 
 SUB = "4b9f2c1e-2d7a-4a8e-9f0b-1c2d3e4f5a6b"
@@ -207,63 +207,53 @@ async def test_api_tokens_cannot_mint_tokens_or_link_github(admin_client, make_c
     assert (await bot.post("/api/v1/auth/github/link")).status_code == 403
 
 
-# ----------------------------------------------------------- Keycloak admin lookups
+# ------------------------------------------------------------- owner lookups via the gateway
+
+SECRET = "i" * 40
 
 
-SERVICE_TOKEN = "service-account-token"
+def _gateway(handler) -> GatewayOwners:
+    return GatewayOwners(transport=httpx.MockTransport(handler))
 
 
-def _keycloak(handler) -> KeycloakAdmin:
-    return KeycloakAdmin(transport=httpx.MockTransport(handler))
-
-
-async def test_owner_lookup_reads_enabled_flag_and_effective_roles():
+async def test_owner_lookup_asks_the_gateway_with_the_internal_secret(monkeypatch):
+    monkeypatch.setattr(get_settings(), "internal_secret", SECRET)
     seen = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append((request.method, request.url.path, request.headers.get("authorization")))
-        path = request.url.path
-        if path.endswith("/protocol/openid-connect/token"):
-            assert b"grant_type=client_credentials" in request.content and b"client_id=slipway" in request.content
-            return httpx.Response(200, json={"access_token": SERVICE_TOKEN, "expires_in": 300})
-        if path == f"/admin/realms/hackspacelabs/users/{SUB}":
-            return httpx.Response(200, json={"id": SUB, "username": "ada", "enabled": True, "firstName": "Ada", "lastName": "L"})
-        if path == f"/admin/realms/hackspacelabs/users/{SUB}/role-mappings/clients/99b9e3d0-8235-4b97-83c7-00765a790a6f/composite":
-            return httpx.Response(200, json=[{"name": "developer"}, {"name": "uma_protection"}])
-        return httpx.Response(500)
+        seen.append((str(request.url), request.headers.get("authorization")))
+        return httpx.Response(200, json={
+            "exists": True, "enabled": True, "username": "ada", "email": "ada@example.com", "firstName": "Ada",
+            "lastName": "L", "roles": ["developer", "root", 7],
+        })
 
-    status = await _keycloak(handler).owner(SUB)
-    assert status == OwnerStatus(exists=True, enabled=True, roles=("developer",), username="ada", email=None, full_name="Ada L")
-    assert all(auth == f"Bearer {SERVICE_TOKEN}" for method, path, auth in seen if "/admin/" in path)
-    assert seen[0][1] == "/realms/hackspacelabs/protocol/openid-connect/token"
+    status = await _gateway(handler).owner(SUB)
+    assert status == OwnerStatus(exists=True, enabled=True, roles=("developer",), username="ada", email="ada@example.com", full_name="Ada L")
+    assert seen == [(f"http://web:3000/internal/slipway/owners/{SUB}", f"Bearer {SECRET}")]
 
 
-async def test_owner_lookup_reports_missing_accounts_and_outages():
-    def missing(request):
-        if request.url.path.endswith("/token"):
-            return httpx.Response(200, json={"access_token": SERVICE_TOKEN, "expires_in": 300})
-        return httpx.Response(404)
-
-    assert (await _keycloak(missing).owner(SUB)).exists is False
-
-    def broken(request):
-        return httpx.Response(401)
-
-    with pytest.raises(oidc.IdentityUnavailable):
-        await _keycloak(broken).owner(SUB)
+async def test_owner_lookup_reports_missing_accounts_and_fails_closed(monkeypatch):
+    monkeypatch.setattr(get_settings(), "internal_secret", SECRET)
+    assert (await _gateway(lambda r: httpx.Response(200, json={"exists": False})).owner(SUB)).exists is False
+    assert (await _gateway(lambda r: httpx.Response(200, json={"exists": True, "enabled": "yes"})).owner(SUB)).enabled is False
+    for response in (httpx.Response(503, json={"error": "down"}), httpx.Response(404, text="Page not found"), httpx.Response(200, text="<html>")):
+        with pytest.raises(oidc.IdentityUnavailable):
+            await _gateway(lambda r, response=response: response).owner(SUB)
+    monkeypatch.setattr(get_settings(), "internal_secret", None)
+    with pytest.raises(oidc.IdentityUnavailable, match="SLIPWAY_INTERNAL_SECRET"):
+        await _gateway(lambda r: httpx.Response(200, json={"exists": False})).owner(SUB)
 
 
-async def test_subjects_are_escaped_in_admin_paths():
+async def test_subjects_are_escaped_in_the_lookup_path(monkeypatch):
+    monkeypatch.setattr(get_settings(), "internal_secret", SECRET)
     paths = []
 
     def handler(request):
         paths.append(request.url.raw_path)
-        if request.url.path.endswith("/token"):
-            return httpx.Response(200, json={"access_token": SERVICE_TOKEN, "expires_in": 300})
-        return httpx.Response(404)
+        return httpx.Response(200, json={"exists": False})
 
-    await _keycloak(handler).owner("../clients")
-    assert b"/users/..%2Fclients" in paths[1]
+    await _gateway(handler).owner("../admin")
+    assert paths == [b"/internal/slipway/owners/..%2Fadmin"]
 
 
 # --------------------------------------------------------------------------- settings
@@ -271,22 +261,23 @@ async def test_subjects_are_escaped_in_admin_paths():
 
 def test_production_needs_the_keycloak_settings(monkeypatch):
     monkeypatch.delenv("SLIPWAY_OIDC_ISSUER")
-    monkeypatch.delenv("SLIPWAY_OIDC_CLIENT_SECRET")
+    monkeypatch.delenv("SLIPWAY_INTERNAL_SECRET", raising=False)
     base = {"env": "production", "secret_key": "s" * 40, "encryption_key": "0" * 43 + "=", "_env_file": None}
     with pytest.raises(ValueError, match="OIDC_ISSUER"):
         Settings(**base)
-    with pytest.raises(ValueError, match="OIDC_CLIENT_SECRET"):
+    with pytest.raises(ValueError, match="INTERNAL_SECRET"):
         Settings(**base, oidc_issuer="https://auth.example/realms/hackspacelabs")
+    with pytest.raises(ValueError, match="INTERNAL_SECRET"):
+        Settings(**base, oidc_issuer="https://auth.example/realms/hackspacelabs", internal_secret="short")
 
 
-def test_internal_realm_url_is_used_for_keys_and_admin():
+def test_internal_realm_url_is_used_for_signing_keys():
     s = Settings(
         _env_file=None, oidc_issuer="https://auth.example/realms/hackspacelabs/",
         oidc_internal_url="http://keycloak:8080/realms/hackspacelabs",
     )
     assert s.oidc_issuer == "https://auth.example/realms/hackspacelabs"
     assert s.jwks_url == "http://keycloak:8080/realms/hackspacelabs/protocol/openid-connect/certs"
-    assert s.oidc_admin_url == "http://keycloak:8080/admin/realms/hackspacelabs"
     assert s.github_callback_url == "http://testserver/api/slipway/auth/github/callback"
 
 

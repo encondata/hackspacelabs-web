@@ -21,9 +21,10 @@ browser ──▶ portal gateway (selfhost/server) ──/api/slipway/*──▶
 - **Roles** come from the `slipway` client in Keycloak (`admin`, `maintainer`, `developer`, `viewer`), assigned
   in the portal under **Identity & access → Users/Groups → Slipway roles**, and re-read on every request.
 - **API tokens** (`Authorization: Bearer slipway_pat_…`, created under **Slipway → Settings → API tokens**) are for
-  scripts and CI, against `https://<portal>/api/slipway/...`. Slipway checks the owner in Keycloak through its
-  read-only service account (cached 60 seconds; refused with 503 if Keycloak can't be reached), so a disabled or
-  deleted account, or one whose roles were removed, stops working.
+  scripts and CI, against `https://<portal>/api/slipway/...`. On use, Slipway asks the portal gateway whether the owner
+  still exists and is enabled and which Slipway roles they hold now (cached 60 seconds; refused with 503 if the gateway
+  or Keycloak can't be reached), so a disabled or deleted account, or one whose roles were removed, stops working.
+  Slipway itself has no Keycloak admin access.
 - **GitHub** is not a way to sign in. People connect it under **Slipway → Settings** so Slipway can sync their
   repositories and deploy with their access. The OAuth app's callback is `<portal>/api/slipway/auth/github/callback`.
 

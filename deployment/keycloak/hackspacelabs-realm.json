@@ -141,18 +141,17 @@
       ]
     },
     {
-      "id": "99b9e3d0-8235-4b97-83c7-00765a790a6f",
       "clientId": "slipway",
       "name": "Slipway",
-      "description": "Deployment API behind the HackSpaceLabs gateway. Holds Slipway roles, accepts access tokens issued to hackspacelabs-web, and uses a read-only service account to check API-token owners.",
+      "description": "Deployment API behind the HackSpaceLabs gateway. Holds the Slipway roles and accepts access tokens issued to hackspacelabs-web; it has no flows, secret or service account.",
       "protocol": "openid-connect",
       "enabled": true,
+      "bearerOnly": true,
       "publicClient": false,
-      "clientAuthenticatorType": "client-secret",
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "implicitFlowEnabled": false,
-      "serviceAccountsEnabled": true,
+      "serviceAccountsEnabled": false,
       "fullScopeAllowed": false,
       "attributes": {
         "oauth2.device.authorization.grant.enabled": "false",

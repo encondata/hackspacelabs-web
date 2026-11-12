@@ -19,7 +19,8 @@ printf '\nAUTH_MODE=lan\nAPP_ORIGIN=http://%s:8088\nAUTH_ORIGIN=http://%s:8089\n
 docker compose -p hsl-ci-lan up -d --no-build --wait --wait-timeout 180
 docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T configure-auth
 docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T -v "$(pwd)/tests:/tests:ro" --entrypoint node configure-auth /tests/email-policy.mjs verify
-docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T -v "$(pwd)/tests:/tests:ro" --entrypoint node configure-auth /tests/slipway-access.mjs
+internal_secret=$(awk -F= '$1=="SLIPWAY_INTERNAL_SECRET"{print substr($0,length($1)+2)}' .env)
+docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T -e SLIPWAY_INTERNAL_SECRET="$internal_secret" -v "$(pwd)/tests:/tests:ro" --entrypoint node configure-auth /tests/slipway-access.mjs
 headers=$(mktemp)
 status=$(curl --noproxy '*' --retry 4 --retry-all-errors --max-time 20 -sS -D "$headers" -o /dev/null -w '%{http_code}' "http://$lan_ip:8088/api/auth/login")
 [[ "$status" == 303 ]] || { echo "LAN login failed: HTTP $status"; docker compose -p hsl-ci-lan logs --tail=20 web; exit 1; }

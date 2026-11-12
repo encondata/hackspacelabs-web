@@ -3,8 +3,8 @@
 * ``verify_access_token``: the portal gateway forwards the signed-in user's access token on every request.
   Slipway trusts nothing about the caller until it has checked the token itself: RS256 signature against the
   realm's JWKS, issuer, audience (``slipway``), authorized party (the gateway's client), expiry and token type.
-* ``owner_status``: API tokens (``slipway_pat_...``) are long-lived, so on use Slipway asks Keycloak, through
-  its own service account, whether the owner still exists and is enabled, and what Slipway roles they hold now.
+* ``owners``: API tokens (``slipway_pat_...``) are long-lived, so on use Slipway asks the portal gateway (which holds
+  Keycloak's management account) whether the owner still exists and is enabled, and what Slipway roles they hold now.
   A disabled or deleted account, or one whose roles were removed, stops working within the cache window.
 """
 
@@ -153,65 +153,45 @@ class OwnerStatus:
 OwnerLookup = Callable[[str], Awaitable[OwnerStatus]]
 
 
-class KeycloakAdmin:
-    """Read-only Keycloak admin calls through Slipway's service account (realm-management role ``view-users`` only)."""
+class GatewayOwners:
+    """Ask the portal gateway about an API token's owner (it holds the Keycloak management account; Slipway does not).
+
+    Reading another user's client roles through Keycloak's admin API needs view-clients, which would also expose every
+    client's secret, so Slipway never gets admin access. The gateway answers this one question over the private network.
+    """
 
     def __init__(self, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self.transport = transport
-        self._token: str | None = None
-        self._token_expires = 0.0
-        self._lock = asyncio.Lock()
-
-    async def _access_token(self, client: httpx.AsyncClient) -> str:
-        if self._token and time.monotonic() < self._token_expires:
-            return self._token
-        s = get_settings()
-        if not s.oidc_client_secret:
-            raise IdentityUnavailable("SLIPWAY_OIDC_CLIENT_SECRET is not set")
-        response = await client.post(
-            s.oidc_token_url,
-            data={"grant_type": "client_credentials", "client_id": s.oidc_client_id, "client_secret": s.oidc_client_secret},
-        )
-        response.raise_for_status()
-        body = response.json()
-        self._token = str(body["access_token"])
-        self._token_expires = time.monotonic() + max(int(body.get("expires_in", 60)) - 20, 5)
-        return self._token
-
-    async def _get(self, client: httpx.AsyncClient, path: str) -> httpx.Response:
-        token = await self._access_token(client)
-        return await client.get(get_settings().oidc_admin_url + path, headers={"Authorization": f"Bearer {token}"})
 
     async def owner(self, sub: str) -> OwnerStatus:
-        async with self._lock:
-            try:
-                async with httpx.AsyncClient(timeout=10, transport=self.transport) as client:
-                    user = await self._get(client, f"/users/{quote(sub, safe='')}")
-                    if user.status_code == 404:
-                        return OwnerStatus(exists=False)
-                    user.raise_for_status()
-                    # Effective roles, so roles granted through groups or composites count too.
-                    mapped = await self._get(
-                        client, f"/users/{quote(sub, safe='')}/role-mappings/clients/{quote(get_settings().oidc_client_uuid, safe='')}/composite"
-                    )
-                    mapped.raise_for_status()
-            except (httpx.HTTPError, KeyError, ValueError) as exc:
-                raise IdentityUnavailable("Could not reach Keycloak to check the token owner") from exc
-        data = user.json()
-        names = sorted({r.get("name") for r in mapped.json() if r.get("name") in SYSTEM_ROLES})
-        full_name = " ".join(p for p in (data.get("firstName"), data.get("lastName")) if isinstance(p, str) and p)
+        s = get_settings()
+        if not s.internal_secret:
+            raise IdentityUnavailable("SLIPWAY_INTERNAL_SECRET is not set")
+        try:
+            async with httpx.AsyncClient(timeout=10, transport=self.transport) as client:
+                response = await client.get(
+                    f"{s.owner_lookup_url}/{quote(sub, safe='')}", headers={"Authorization": f"Bearer {s.internal_secret}"}
+                )
+                response.raise_for_status()
+                data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise IdentityUnavailable("Could not check the token owner with the portal") from exc
+        if not isinstance(data, dict) or not data.get("exists"):
+            return OwnerStatus(exists=False)
+        roles = data.get("roles") if isinstance(data.get("roles"), list) else []
+        text = lambda key: data.get(key) if isinstance(data.get(key), str) else None  # noqa: E731
+        full_name = " ".join(p for p in (text("firstName"), text("lastName")) if p)
         return OwnerStatus(
-            exists=True, enabled=bool(data.get("enabled")), roles=tuple(names),
-            username=data.get("username") if isinstance(data.get("username"), str) else None,
-            email=data.get("email") if isinstance(data.get("email"), str) else None,
-            full_name=full_name,
+            exists=True, enabled=data.get("enabled") is True,
+            roles=tuple(sorted({r for r in roles if isinstance(r, str) and r in SYSTEM_ROLES})),
+            username=text("username"), email=text("email"), full_name=full_name,
         )
 
 
 class OwnerCache:
     def __init__(self, lookup: OwnerLookup | None = None) -> None:
-        self._admin = KeycloakAdmin()
-        self.lookup: OwnerLookup = lookup or self._admin.owner
+        self._gateway = GatewayOwners()
+        self.lookup: OwnerLookup = lookup or self._gateway.owner
         self._entries: dict[str, tuple[float, OwnerStatus]] = {}
 
     def clear(self) -> None:

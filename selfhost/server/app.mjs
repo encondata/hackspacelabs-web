@@ -2,6 +2,7 @@ import express from 'express';
 import {profileRouter} from './profile.mjs';
 import {managementRouter} from './management.mjs';
 import {slipwayRouter} from './slipway.mjs';
+import {slipwayOwnersRouter} from './slipway-owners.mjs';
 import session from 'express-session';
 import helmet from 'helmet';
 import {rateLimit} from 'express-rate-limit';
@@ -27,6 +28,8 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,man
   if(req.path.startsWith('/api/')||(req.path==='/portal'||req.path==='/me')||req.path==='/admin'||req.path==='/login')res.set('Cache-Control','no-store');
   next();
  });
+ // Internal: Slipway asks whether an API token's owner is still enabled (see slipway-owners.mjs).
+ if(management&&config.slipwayInternalSecret)app.use('/internal/slipway/owners',slipwayOwnersRouter({api:management,secret:config.slipwayInternalSecret,log}));
  app.get('/healthz',async(_req,res)=>{try{await healthy();res.json({status:'ok'})}catch{res.status(503).json({status:'unavailable'})}});
  app.use('/assets',express.static(path.join(publicDir,'assets'),{immutable:true,maxAge:'1y',fallthrough:false}));
  app.use(session({name:cookieName,secret:config.sessionSecret,store,resave:false,saveUninitialized:false,rolling:true,cookie:{httpOnly:true,secure:secureCookies,sameSite:'lax',path:'/',maxAge:config.idleMs}}));

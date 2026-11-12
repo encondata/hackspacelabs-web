@@ -30,16 +30,17 @@ assert.ok(id.hsl_roles?.includes('admin'),'ID token carries hsl_roles');
 assert.ok(id.slipway_roles?.includes('admin'),'ID token carries slipway_roles');
 assert.ok(![].concat(id.aud).includes('slipway'),'ID token is not addressed to Slipway');
 
-// Slipway's service account: client credentials work, the lookups Slipway makes are allowed, writes are not.
-const service=await token('hackspacelabs',{grant_type:'client_credentials',client_id:'slipway',client_secret:process.env.SLIPWAY_OIDC_CLIENT_SECRET});
-// The slipway client has a fixed internal id (realm file, configure-auth.mjs, SLIPWAY_OIDC_CLIENT_UUID).
-const slipway={id:'99b9e3d0-8235-4b97-83c7-00765a790a6f'};
-assert.equal((await get('/clients/'+slipway.id,admin)).clientId,'slipway','slipway client has the fixed id');
-assert.equal((await get('/users/'+user.id,service)).enabled,true);
-const roles=await get(`/users/${user.id}/role-mappings/clients/${slipway.id}/composite`,service);
-assert.ok(roles.some(r=>r.name==='admin'),'service account sees effective Slipway roles');
-const write=await fetch(base+'/admin/realms/hackspacelabs/users/'+user.id,{method:'PUT',headers:{Authorization:'Bearer '+service,'Content-Type':'application/json'},body:JSON.stringify({enabled:false})});
-assert.equal(write.status,403,'Slipway service account is read-only');
-const clients=await fetch(base+'/admin/realms/hackspacelabs/clients/'+web.id+'/client-secret',{headers:{Authorization:'Bearer '+service}});
-assert.equal(clients.status,403,'Slipway service account cannot read client secrets');
-console.log('Keycloak issues the tokens Slipway expects, and Slipway\'s service account is read-only.');
+// Slipway has no Keycloak admin access: its client has no service account, and the gateway answers owner checks.
+const [slipwayClient]=await get('/clients?clientId=slipway',admin);
+assert.equal(slipwayClient.serviceAccountsEnabled,false,'slipway client has no service account');
+const owners='http://web:3000/internal/slipway/owners/';
+const ask=headers=>fetch(owners+user.id,{headers,signal:AbortSignal.timeout(10000)});
+const answer=await ask({Authorization:'Bearer '+process.env.SLIPWAY_INTERNAL_SECRET});
+assert.equal(answer.status,200,'gateway answers owner checks');
+const owner=await answer.json();
+assert.equal(owner.exists,true);assert.equal(owner.enabled,true);assert.equal(owner.username,'admin');
+assert.ok(owner.roles.includes('admin'),'gateway reads effective Slipway roles from the real Keycloak');
+for(const headers of [{},{Authorization:'Bearer wrong-secret'},{Authorization:'Bearer '+process.env.SLIPWAY_INTERNAL_SECRET,'X-Forwarded-For':'203.0.113.9'}]){
+  assert.equal((await ask(headers)).status,404,'owner checks are hidden without the secret or through the proxy');
+}
+console.log('Keycloak issues the tokens Slipway expects, and the gateway answers Slipway owner checks.');

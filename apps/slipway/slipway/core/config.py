@@ -56,21 +56,19 @@ class Settings(BaseSettings):
     # Slipway verifies itself: signature (JWKS), issuer, audience, authorized party and token type.
     # oidc_issuer is the public issuer URL, exactly as it appears in the tokens' "iss" claim.
     oidc_issuer: str = ""
-    # Where Slipway itself reaches the realm (JWKS, service-account token, admin API); defaults to oidc_issuer.
+    # Where Slipway itself reaches the realm (signing keys); defaults to oidc_issuer.
     # In the compose stack this is the internal http://keycloak:8080/realms/hackspacelabs.
     oidc_internal_url: str = ""
     oidc_audience: str = "slipway"
     # The client the gateway signs in with; tokens issued to any other client are refused.
     oidc_authorized_party: str = "hackspacelabs-web"
     oidc_roles_claim: str = "slipway_roles"
-    # Confidential "slipway" client with a view-users service account. Slipway uses it to confirm that an API
-    # token's owner is still enabled in Keycloak, and to read their current Slipway roles.
-    oidc_client_id: str = "slipway"
-    # Keycloak's internal id of that client, fixed by the installer (realm file and configure-auth.mjs). The service
-    # account only has view-users, so it cannot look the client up; it needs the id to read a user's Slipway roles.
-    oidc_client_uuid: str = "99b9e3d0-8235-4b97-83c7-00765a790a6f"
-    oidc_client_secret: str | None = None
-    # How long a Keycloak lookup for an API-token owner is trusted before asking again.
+    # API-token owners: Slipway has no Keycloak admin access. The portal gateway, which holds the realm management
+    # account, answers "is this account still enabled, and with which Slipway roles?" at owner_lookup_url, for callers
+    # presenting internal_secret (SLIPWAY_INTERNAL_SECRET, shared with the gateway).
+    owner_lookup_url: str = "http://web:3000/internal/slipway/owners"
+    internal_secret: str | None = None
+    # How long an owner lookup is trusted before asking again.
     oidc_owner_cache_seconds: int = 60
 
     github_client_id: str | None = None
@@ -86,7 +84,7 @@ class Settings(BaseSettings):
     default_deploy_root: str = "/opt/slipway"
     ssh_connect_timeout: int = 15
 
-    @field_validator("base_url", "oidc_issuer", "oidc_internal_url", "api_public_path")
+    @field_validator("base_url", "oidc_issuer", "oidc_internal_url", "api_public_path", "owner_lookup_url")
     @classmethod
     def _strip_slash(cls, value: str) -> str:
         return value.rstrip("/")
@@ -111,8 +109,8 @@ class Settings(BaseSettings):
                 )
             if not self.oidc_issuer:
                 raise ValueError("SLIPWAY_OIDC_ISSUER must be set in production")
-            if not self.oidc_client_secret:
-                raise ValueError("SLIPWAY_OIDC_CLIENT_SECRET must be set in production")
+            if not self.internal_secret or len(self.internal_secret) < 32:
+                raise ValueError("SLIPWAY_INTERNAL_SECRET must be set to 32+ characters in production")
         return self
 
     @model_validator(mode="after")
@@ -154,18 +152,6 @@ class Settings(BaseSettings):
     @property
     def jwks_url(self) -> str:
         return f"{self.realm_url}/protocol/openid-connect/certs"
-
-    @property
-    def oidc_token_url(self) -> str:
-        return f"{self.realm_url}/protocol/openid-connect/token"
-
-    @property
-    def oidc_admin_url(self) -> str:
-        """Admin REST API base for the realm: .../realms/<name> -> .../admin/realms/<name>."""
-        base, sep, realm = self.realm_url.rpartition("/realms/")
-        if not sep:
-            raise ValueError("The OIDC issuer must look like https://host/realms/<realm>")
-        return f"{base}/admin/realms/{realm}"
 
     @property
     def github_enabled(self) -> bool:

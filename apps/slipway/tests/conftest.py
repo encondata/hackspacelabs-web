@@ -19,7 +19,7 @@ os.environ.update(
     SLIPWAY_GITHUB_CLIENT_SECRET="test-secret",
     SLIPWAY_BASE_URL="http://testserver",
     SLIPWAY_OIDC_ISSUER=ISSUER,
-    SLIPWAY_OIDC_CLIENT_SECRET="test-oidc-secret",
+    SLIPWAY_INTERNAL_SECRET="test-internal-secret-that-is-long-enough",
 )
 
 import time  # noqa: E402

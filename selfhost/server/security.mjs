@@ -35,5 +35,7 @@ export function readConfig(env=process.env){
  tokenCipher(env.TOKEN_ENCRYPTION_KEY||'');
  let slipwayUrl=null;
  if(env.SLIPWAY_URL){const u=new URL(env.SLIPWAY_URL);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash||u.pathname!=='/')throw new Error('SLIPWAY_URL must be an http(s) origin such as http://slipway:8000');slipwayUrl=u.origin}
- return {production,secureCookies:production&&!lan,allowInsecureOidc:lan,origin:origin.origin,issuer:issuer.href.replace(/\/$/,''),clientId:env.OIDC_CLIENT_ID||'hackspacelabs-web',clientSecret:env.OIDC_CLIENT_SECRET,sessionSecret:env.SESSION_SECRET,encryptionKey:env.TOKEN_ENCRYPTION_KEY,databaseUrl:env.DATABASE_URL,slipwayUrl,port:Number(env.PORT||3000),host:production?'0.0.0.0':'127.0.0.1',idleMs:30*60*1000,absoluteMs:8*60*60*1000,refreshMs:60*1000};
+ const slipwayInternalSecret=env.SLIPWAY_INTERNAL_SECRET||null;
+ if(slipwayInternalSecret&&slipwayInternalSecret.length<32)throw new Error('SLIPWAY_INTERNAL_SECRET must contain at least 32 characters');
+ return {production,secureCookies:production&&!lan,allowInsecureOidc:lan,origin:origin.origin,issuer:issuer.href.replace(/\/$/,''),clientId:env.OIDC_CLIENT_ID||'hackspacelabs-web',clientSecret:env.OIDC_CLIENT_SECRET,sessionSecret:env.SESSION_SECRET,encryptionKey:env.TOKEN_ENCRYPTION_KEY,databaseUrl:env.DATABASE_URL,slipwayUrl,slipwayInternalSecret,port:Number(env.PORT||3000),host:production?'0.0.0.0':'127.0.0.1',idleMs:30*60*1000,absoluteMs:8*60*60*1000,refreshMs:60*1000};
 }
