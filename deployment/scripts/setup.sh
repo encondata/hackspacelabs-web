@@ -54,6 +54,12 @@ set_setting() {
   mv -- "$temporary" .env
 }
 get_setting() { awk -F= -v key="$1" '$1==key {value=substr($0,length(key)+2)} END{print value}' .env; }
+# Secrets added by later releases are generated once for existing installations, never replaced or printed.
+ensure_secret() { [[ -n "$(get_setting "$1")" ]] || set_setting "$1" "$2"; }
+ensure_secret SLIPWAY_DB_PASSWORD "$(openssl rand -hex 48)"
+ensure_secret SLIPWAY_SECRET_KEY "$(openssl rand -hex 48)"
+# Fernet key: urlsafe base64 of 32 random bytes.
+ensure_secret SLIPWAY_ENCRYPTION_KEY "$(openssl rand -base64 32 | tr '+/' '-_')"
 if [[ "$access_mode" == lan ]]; then
   if [[ ! "$lan_ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then echo 'LAN mode requires a private IPv4 address.' >&2; exit 1; fi
   a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]})); c=$((10#${BASH_REMATCH[3]})); d=$((10#${BASH_REMATCH[4]}))
@@ -75,7 +81,10 @@ chmod 600 .env
 # Never source .env as executable shell code or print rendered secret configuration.
 docker compose config --quiet
 echo 'Building images and starting local listeners. DNS, certificates, and proxy routes are not checked.'
-if ! BUILDX_GIT_INFO=false docker compose up -d --build --wait --wait-timeout 180; then
+# Provision application databases (idempotent) before the services that need them start.
+if ! { docker compose up -d --wait --wait-timeout 120 postgres &&
+       docker compose exec -T postgres sh /docker-entrypoint-initdb.d/02-slipway.sh >/dev/null &&
+       BUILDX_GIT_INFO=false docker compose up -d --build --wait --wait-timeout 180; }; then
   echo 'Startup did not become healthy. Containers/data are retained; this is not a successful installation.' >&2
   echo 'Check docker compose ps and logs for local container, port, or database errors; then rerun install.sh.' >&2
   exit 1

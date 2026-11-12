@@ -70,6 +70,31 @@ fi
         self.assertIn('pull --ff-only origin main',self.log.read_text())
         self.assertFalse(Path(str(self.destination)+'.install-lock').exists())
 
+    def test_slipway_secrets_added_to_existing_env_and_database_provisioned(self):
+        self.assertEqual(self.run_install().returncode,0)
+        envfile=self.destination/'deployment/.env'
+        # Simulate an installation made before Slipway existed.
+        legacy=[x for x in envfile.read_text().splitlines() if not x.startswith('SLIPWAY_')]
+        envfile.write_text('\n'.join(legacy)+'\n')
+        self.log.write_text('')
+        result=self.run_install('')
+        self.assertEqual(result.returncode,0,result.stderr)
+        values=dict(x.split('=',1) for x in envfile.read_text().splitlines() if '=' in x)
+        self.assertEqual(len(values['SLIPWAY_DB_PASSWORD']),96)
+        self.assertEqual(len(values['SLIPWAY_SECRET_KEY']),96)
+        key=values['SLIPWAY_ENCRYPTION_KEY']
+        self.assertRegex(key,r'^[A-Za-z0-9_-]{43}=$')
+        for secret in (values['SLIPWAY_DB_PASSWORD'],key):
+            self.assertNotIn(secret,result.stdout+result.stderr)
+        for line in legacy:
+            self.assertIn(line,envfile.read_text())
+        calls=self.log.read_text()
+        self.assertLess(calls.index('up -d --wait --wait-timeout 120 postgres'),calls.index('exec -T postgres sh /docker-entrypoint-initdb.d/02-slipway.sh'))
+        self.assertLess(calls.index('02-slipway.sh'),calls.index('up -d --build'))
+        # Re-running keeps the generated values.
+        self.assertEqual(self.run_install('').returncode,0)
+        self.assertIn('SLIPWAY_ENCRYPTION_KEY='+key,envfile.read_text())
+
     def test_unraid_ownership_uses_only_scoped_trust(self):
         self.assertEqual(self.run_install().returncode,0)
         self.env["TEST_UNSAFE"]="1"
