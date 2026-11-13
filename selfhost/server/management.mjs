@@ -22,7 +22,7 @@ const segment=v=>{if(typeof v!=='string'||!v||/[\s/\\?#%]/.test(v)||v==='.'||v==
 const names=v=>{if(!Array.isArray(v)||v.length>100||v.some(x=>typeof x!=='string'||!x||x.length>255))fail('Invalid list');return [...new Set(v)]};
 const bool=v=>{if(typeof v!=='boolean')fail('Expected true or false');return v};
 const userView=u=>({id:u.id,username:u.username,firstName:u.firstName||'',lastName:u.lastName||'',email:u.email||'',enabled:u.enabled,requiredActions:u.requiredActions||[]});
-const protectedClients=new Set(['hackspacelabs-web','hackspacelabs-management','hackspacelabs-android','account','account-console','admin-cli','broker','realm-management','security-admin-console']);
+const protectedClients=new Set(['hackspacelabs-web','hackspacelabs-management','hackspacelabs-android','harbormaster','account','account-console','admin-cli','broker','realm-management','security-admin-console']);
 export const settingFields=['displayName','passwordPolicy','registrationAllowed','rememberMe','bruteForceProtected','accessTokenLifespan','ssoSessionIdleTimeout','ssoSessionMaxLifespan'];
 export function managementRouter({api,userFor,config,log=console}){
  const router=express.Router();

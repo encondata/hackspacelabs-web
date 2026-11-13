@@ -31,6 +31,12 @@ if(process.argv[2]==='seed'){
  if(!(await api('/clients/'+android.id+'/scope-mappings/realm')).some(role=>role.name==='offline_access'))throw new Error('Android app tokens cannot carry offline_access');
  if(!(await api('/users/'+admin.id+'/role-mappings/realm/composite')).some(role=>role.name==='offline_access'))throw new Error('Seeded admin cannot get offline tokens');
  console.log('Android app public client verified.');
+ const [harbor]=await api('/clients?clientId=harbormaster');
+ const harborRedirect=process.env.HARBORMASTER_ORIGIN+'/api/auth/hsl/callback';
+ if(!harbor||harbor.publicClient||harbor.directAccessGrantsEnabled||JSON.stringify(harbor.redirectUris)!==JSON.stringify([harborRedirect])||harbor.attributes?.['pkce.code.challenge.method']!=='S256')throw new Error('Harbor Master client is missing or misconfigured');
+ const {createHmac}=await import('node:crypto');
+ if((await api('/clients/'+harbor.id+'/client-secret')).value!==createHmac('sha256',process.env.OIDC_CLIENT_SECRET).update('harbormaster-v1').digest('hex'))throw new Error('Harbor Master client secret is not the derived value');
+ console.log('Harbor Master confidential client verified.');
 }
 
 // Exercise the actual realm-scoped service account and the routes used by the portal.

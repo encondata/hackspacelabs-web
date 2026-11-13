@@ -9,6 +9,7 @@ trap cleanup EXIT
 docker tag hackspacelabs-web:ci hsl-ci-lan-web
 docker tag hackspacelabs-web:ci hackspacelabs-web
 docker tag hackspacelabs-auth:ci hsl-ci-lan-keycloak
+printf '\nHARBORMASTER_ORIGIN=https://harbormaster.not-configured.invalid\n' >> .env
 docker compose -p hsl-ci-lan up -d --no-build --wait --wait-timeout 180
 # Complete the original realm startup before changing the endpoints.
 docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T configure-auth
