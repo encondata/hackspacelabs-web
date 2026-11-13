@@ -28,6 +28,8 @@ if(process.argv[2]==='seed'){
  const [android]=await api('/clients?clientId=hackspacelabs-android');
  if(!android?.publicClient||android.directAccessGrantsEnabled||JSON.stringify(android.redirectUris)!=='["com.hackspacelabs.app:/oauth2redirect"]'||android.attributes?.['pkce.code.challenge.method']!=='S256')throw new Error('Android app client is missing or misconfigured');
  if(!(await api('/clients/'+android.id+'/optional-client-scopes')).some(scope=>scope.name==='offline_access'))throw new Error('Android app cannot request offline_access');
+ if(!(await api('/clients/'+android.id+'/scope-mappings/realm')).some(role=>role.name==='offline_access'))throw new Error('Android app tokens cannot carry offline_access');
+ if(!(await api('/users/'+admin.id+'/role-mappings/realm/composite')).some(role=>role.name==='offline_access'))throw new Error('Seeded admin cannot get offline tokens');
  console.log('Android app public client verified.');
 }
 

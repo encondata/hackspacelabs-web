@@ -87,4 +87,24 @@ if(!scopeIds.has('offline_access'))throw new Error('Keycloak offline_access scop
 await api('/clients/'+android.id+'/optional-client-scopes/'+scopeIds.get('offline_access'),{method:'PUT'});
 const androidCheck=await api('/clients/'+android.id);
 if(!androidCheck.publicClient||androidCheck.directAccessGrantsEnabled||androidCheck.redirectUris?.length!==1||androidCheck.redirectUris[0]!==androidRedirect)throw new Error('Android app client verification failed');
-console.log('HackSpaceLabs Android app sign-in configured.');
+// fullScopeAllowed is off, so the app's tokens carry only the roles it is scoped to; offline_access must be one.
+const offlineRole=await api('/roles/offline_access');
+await api('/clients/'+android.id+'/scope-mappings/realm',{method:'POST',body:JSON.stringify([offlineRole])});
+// Accounts created through the portal get the realm's default role (offline_access, uma_authorization) from
+// Keycloak; accounts imported with the realm, such as the seeded admin, never did. Give them the same baseline,
+// so every account can keep the Android app's biometric sign-in. Other roles are untouched.
+const defaultRole=await api('/roles/'+encodeURIComponent(realm.defaultRole?.name||'default-roles-hackspacelabs'));
+let baselined=0;
+for(let first=0;;first+=100){
+  const users=await api('/users?first='+first+'&max=100&briefRepresentation=true');
+  for(const user of users){
+    if(user.username?.startsWith('service-account-'))continue;
+    const realmRoles=await api('/users/'+encodeURIComponent(user.id)+'/role-mappings/realm');
+    if(!realmRoles.some(role=>role.id===defaultRole.id)){
+      await api('/users/'+encodeURIComponent(user.id)+'/role-mappings/realm',{method:'POST',body:JSON.stringify([defaultRole])});
+      baselined++;
+    }
+  }
+  if(users.length<100)break;
+}
+console.log('HackSpaceLabs Android app sign-in configured'+(baselined?'; gave '+baselined+' imported account(s) the realm default role.':'.'));
