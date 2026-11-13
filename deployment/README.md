@@ -124,6 +124,7 @@ Register **one OIDC client per application**, and separate production and develo
 - Register exact HTTPS callback and logout URLs; do not use broad wildcard redirects.
 - Server apps use a confidential client and keep the generated secret server-side. Obtain that secret from the client's Credentials tab after creation; never put it in a SPA or mobile app.
 - Browser-only/mobile/native apps require a public client with PKCE and appropriate redirect handling. They must not reuse the website's confidential client.
+- The **HackSpaceLabs Android app** has its own public client, `hackspacelabs-android`, which the installer creates and keeps up to date (redirect `com.hackspacelabs.app:/oauth2redirect`, PKCE S256, optional `offline_access` for its biometric sign-in). Connected apps lists it as internal; it needs no manual setup.
 - Request `openid profile email` and discover endpoints/JWKS from the full issuer above. Use maintained OIDC libraries and validate issuer, audience, signature, state, nonce, and token expiry.
 - Use the stable `sub` claim for identity. Create roles/scopes per application; other applications are not automatically given HackSpaceLabs administrator roles.
 - Client credentials/service accounts are a separate machine-to-machine decision and are off in these templates.

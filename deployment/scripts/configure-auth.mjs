@@ -113,3 +113,20 @@ if(!slipwayAssigned){
   }
 }
 console.log('Slipway access configured'+(promoted?'; granted the Slipway admin role to '+promoted+' portal administrator(s).':'.'));
+
+// First-party Android app (HackSpaceLabs-Android). A public client: Authorization Code + PKCE S256 in a Custom Tab,
+// returning to the app's private-use scheme (RFC 8252 section 7.1), which the portal's Connected apps form doesn't
+// accept. offline_access lets the app's biometric sign-in outlive Keycloak's browser session.
+const androidId='hackspacelabs-android';
+const androidRedirect='com.hackspacelabs.app:/oauth2redirect';
+const androidRepresentation={clientId:androidId,name:'HackSpaceLabs for Android',protocol:'openid-connect',enabled:true,publicClient:true,standardFlowEnabled:true,directAccessGrantsEnabled:false,implicitFlowEnabled:false,serviceAccountsEnabled:false,consentRequired:false,fullScopeAllowed:false,redirectUris:[androidRedirect],webOrigins:[],attributes:{'pkce.code.challenge.method':'S256','post.logout.redirect.uris':'com.hackspacelabs.app:/logout'}};
+let [android]=await api('/clients?clientId='+androidId);
+if(!android){await api('/clients',{method:'POST',body:JSON.stringify(androidRepresentation)});[android]=await api('/clients?clientId='+androidId)}
+else await api('/clients/'+android.id,{method:'PUT',body:JSON.stringify({...android,...androidRepresentation,attributes:{...android.attributes,...androidRepresentation.attributes}})});
+const scopeIds=new Map((await api('/client-scopes')).map(scope=>[scope.name,scope.id]));
+for(const name of ['basic','profile','email'])if(scopeIds.has(name))await api('/clients/'+android.id+'/default-client-scopes/'+scopeIds.get(name),{method:'PUT'});
+if(!scopeIds.has('offline_access'))throw new Error('Keycloak offline_access scope is missing');
+await api('/clients/'+android.id+'/optional-client-scopes/'+scopeIds.get('offline_access'),{method:'PUT'});
+const androidCheck=await api('/clients/'+android.id);
+if(!androidCheck.publicClient||androidCheck.directAccessGrantsEnabled||androidCheck.redirectUris?.length!==1||androidCheck.redirectUris[0]!==androidRedirect)throw new Error('Android app client verification failed');
+console.log('HackSpaceLabs Android app sign-in configured.');
