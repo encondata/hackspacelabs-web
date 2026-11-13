@@ -25,6 +25,10 @@ if(process.argv[2]==='seed'){
  for(const attribute of profile.attributes||[])if(['email','firstName','lastName'].includes(attribute.name)&&attribute.required)throw new Error('Profile field remains mandatory: '+attribute.name);
  for(const action of await api('/authentication/required-actions'))if(['VERIFY_EMAIL','UPDATE_PROFILE','VERIFY_PROFILE'].includes(action.alias)&&(action.enabled||action.defaultAction))throw new Error('Unrequested action remains enabled');
  console.log('Existing email/profile gates removed; admin still requires password change, without an email address.');
+ const [android]=await api('/clients?clientId=hackspacelabs-android');
+ if(!android?.publicClient||android.directAccessGrantsEnabled||JSON.stringify(android.redirectUris)!=='["com.hackspacelabs.app:/oauth2redirect"]'||android.attributes?.['pkce.code.challenge.method']!=='S256')throw new Error('Android app client is missing or misconfigured');
+ if(!(await api('/clients/'+android.id+'/optional-client-scopes')).some(scope=>scope.name==='offline_access'))throw new Error('Android app cannot request offline_access');
+ console.log('Android app public client verified.');
 }
 
 // Exercise the actual realm-scoped service account and the routes used by the portal.
