@@ -108,3 +108,26 @@ for(let first=0;;first+=100){
   if(users.length<100)break;
 }
 console.log('HackSpaceLabs Android app sign-in configured'+(baselined?'; gave '+baselined+' imported account(s) the realm default role.':'.'));
+
+// Harbor Master (the HSL kanban, a separate server). A confidential client: Authorization Code + PKCE S256, with
+// the secret derived from OIDC_CLIENT_SECRET for its own purpose, like the management account, so no new secret
+// has to be generated or stored. scripts/harbormaster-secret.mjs writes it into Harbor Master's .env without
+// printing it. Set HARBORMASTER_ORIGIN (e.g. https://harbormaster.hackspacelabs.com) to create or update it.
+const harborOrigin=(process.env.HARBORMASTER_ORIGIN||'').replace(/\/+$/,'');
+if(harborOrigin){
+  let parsed;try{parsed=new URL(harborOrigin)}catch{throw new Error('HARBORMASTER_ORIGIN is not a valid URL')}
+  if(parsed.origin!==harborOrigin||!['https:','http:'].includes(parsed.protocol))throw new Error('HARBORMASTER_ORIGIN must be an origin such as https://harbormaster.example.com');
+  const harborId='harbormaster';
+  const harborSecret=createHmac('sha256',process.env.OIDC_CLIENT_SECRET).update('harbormaster-v1').digest('hex');
+  const harborRedirect=harborOrigin+'/api/auth/hsl/callback';
+  const harborRepresentation={clientId:harborId,name:'Harbor Master',protocol:'openid-connect',enabled:true,publicClient:false,clientAuthenticatorType:'client-secret',secret:harborSecret,standardFlowEnabled:true,directAccessGrantsEnabled:false,implicitFlowEnabled:false,serviceAccountsEnabled:false,consentRequired:false,fullScopeAllowed:false,rootUrl:harborOrigin,baseUrl:harborOrigin+'/',redirectUris:[harborRedirect],webOrigins:[harborOrigin],attributes:{'pkce.code.challenge.method':'S256','post.logout.redirect.uris':harborOrigin+'/login'}};
+  let [harbor]=await api('/clients?clientId='+harborId);
+  if(!harbor){await api('/clients',{method:'POST',body:JSON.stringify(harborRepresentation)});[harbor]=await api('/clients?clientId='+harborId)}
+  else await api('/clients/'+harbor.id,{method:'PUT',body:JSON.stringify({...harbor,...harborRepresentation,attributes:{...harbor.attributes,...harborRepresentation.attributes}})});
+  const harborScopes=new Map((await api('/client-scopes')).map(scope=>[scope.name,scope.id]));
+  for(const name of ['basic','profile','email'])if(harborScopes.has(name))await api('/clients/'+harbor.id+'/default-client-scopes/'+harborScopes.get(name),{method:'PUT'});
+  const harborCheck=await api('/clients/'+harbor.id);
+  const harborStored=await api('/clients/'+harbor.id+'/client-secret');
+  if(harborCheck.publicClient||harborCheck.directAccessGrantsEnabled||harborCheck.implicitFlowEnabled||harborCheck.redirectUris?.length!==1||harborCheck.redirectUris[0]!==harborRedirect||harborStored?.value!==harborSecret)throw new Error('Harbor Master client verification failed');
+  console.log('Harbor Master sign-in configured for '+harborOrigin+'. Run scripts/harbormaster-secret.mjs to give Harbor Master its client secret.');
+}else console.log('HARBORMASTER_ORIGIN is not set; Harbor Master sign-in client left unchanged.');
