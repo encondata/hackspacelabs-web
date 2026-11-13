@@ -16,6 +16,8 @@
  encode zstd gzip
  @health path /healthz
  respond @health 404
+ @internal path /internal/*
+ respond @internal 404
  reverse_proxy web:3000 {
   header_up Host {$APP_HOST}
   header_up X-Forwarded-Proto https

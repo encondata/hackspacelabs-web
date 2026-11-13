@@ -20,10 +20,12 @@ jobs:
             selfhost/package-lock.json
       - run: npm ci
       - run: npm ci --prefix selfhost
+      - name: Type-check the frontend
+        run: npx tsc --noEmit -p .
       - run: npm run build
       - run: npm test
       - run: python3 deployment/tests/test_installer.py
-      - run: bash -n install.sh deployment/scripts/setup.sh deployment/postgres/init.sh
+      - run: bash -n install.sh deployment/scripts/setup.sh deployment/postgres/init.sh deployment/postgres/slipway.sh
       - name: Validate Compose (disposable configuration only)
         run: docker compose -f deployment/compose.yaml config --quiet
         env:
@@ -34,11 +36,34 @@ jobs:
           OIDC_CLIENT_SECRET: ci-placeholder
           SESSION_SECRET: ci-placeholder
           TOKEN_ENCRYPTION_KEY: ci-placeholder
+          SLIPWAY_DB_PASSWORD: ci-placeholder
+          SLIPWAY_SECRET_KEY: ci-placeholder
+          SLIPWAY_INTERNAL_SECRET: ci-placeholder
+          SLIPWAY_ENCRYPTION_KEY: ci-placeholder
       - name: Build web image
         run: docker build -f deployment/Dockerfile -t hackspacelabs-web:ci .
       - name: Verify web image without DNS, certificates, or external network
         run: bash deployment/tests/docker-startup.sh
       - name: Build Keycloak image
         run: docker build -f deployment/keycloak/Dockerfile -t hackspacelabs-auth:ci deployment
+      - name: Build Slipway image
+        run: docker build -t hackspacelabs-slipway:ci apps/slipway
       - name: Verify existing Keycloak realm migration and LAN login
         run: bash deployment/tests/keycloak-lan.sh
+  slipway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/slipway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: apps/slipway/pyproject.toml
+      - run: pip install -e '.[dev]'
+      - run: python -m pytest -q
+        env:
+          SLIPWAY_ENV_FILE: ''

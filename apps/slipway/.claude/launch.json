@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "slipway",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["scripts/dev.sh"],
+      "port": 8000
+    },
+    {
+      "name": "slipway-demo",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["PORT=8001", "SLIPWAY_BASE_URL=http://localhost:8001", "SLIPWAY_DATABASE_URL=sqlite+aiosqlite:///data/slipway-demo.db", "sh", "scripts/dev.sh"],
+      "port": 8001
+    }
+  ]
+}

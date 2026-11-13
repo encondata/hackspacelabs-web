@@ -28,7 +28,8 @@
   },
   "include": [
     "app/**/*.tsx",
-    "selfhost/web/**/*.tsx"
+    "selfhost/web/**/*.tsx",
+    "selfhost/web/**/*.ts"
   ],
   "exclude": [
     "node_modules",

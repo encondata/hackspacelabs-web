@@ -1,6 +1,8 @@
 import express from 'express';
 import {profileRouter} from './profile.mjs';
 import {managementRouter} from './management.mjs';
+import {slipwayRouter} from './slipway.mjs';
+import {slipwayOwnersRouter} from './slipway-owners.mjs';
 import session from 'express-session';
 import helmet from 'helmet';
 import {rateLimit} from 'express-rate-limit';
@@ -26,24 +28,31 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,man
   if(req.path.startsWith('/api/')||(req.path==='/portal'||req.path==='/me')||req.path==='/admin'||req.path==='/login')res.set('Cache-Control','no-store');
   next();
  });
+ // Internal: Slipway asks whether an API token's owner is still enabled (see slipway-owners.mjs).
+ if(management&&config.slipwayInternalSecret)app.use('/internal/slipway/owners',slipwayOwnersRouter({api:management,secret:config.slipwayInternalSecret,log}));
  app.get('/healthz',async(_req,res)=>{try{await healthy();res.json({status:'ok'})}catch{res.status(503).json({status:'unavailable'})}});
  app.use('/assets',express.static(path.join(publicDir,'assets'),{immutable:true,maxAge:'1y',fallthrough:false}));
- app.use(express.json({limit:'8kb'}));app.use(express.urlencoded({extended:false,limit:'8kb'}));
  app.use(session({name:cookieName,secret:config.sessionSecret,store,resave:false,saveUninitialized:false,rolling:true,cookie:{httpOnly:true,secure:secureCookies,sameSite:'lax',path:'/',maxAge:config.idleMs}}));
+ // Mounted before the JSON parsers so request bodies are forwarded unchanged.
+ if(config.slipwayUrl)app.use('/api/slipway',slipwayRouter({target:config.slipwayUrl,userFor,accessToken,config,log}));
+ app.use(express.json({limit:'8kb'}));app.use(express.urlencoded({extended:false,limit:'8kb'}));
  const authLimit=rateLimit({windowMs:15*60*1000,limit:60,standardHeaders:'draft-8',legacyHeaders:false,message:{error:'Too many authentication attempts. Please try again later.'}});
  app.use('/api/auth/login',authLimit);app.use('/api/auth/callback',authLimit);
  function clearCookie(res){res.clearCookie(cookieName,{httpOnly:true,secure:secureCookies,sameSite:'lax',path:'/'})}
  async function expire(req,res){await regenerate(req.session);clearCookie(res)}
+ // Tokens stay server-side, sealed in the session; only the gateway ever sends the access token (to Slipway).
+ function sealTokens(tokens){return cipher.seal({accessToken:tokens.accessToken,refreshToken:tokens.refreshToken,idToken:tokens.idToken})}
+ function accessToken(req){try{return cipher.open(req.session.tokens).accessToken||null}catch{return null}}
  async function userFor(req,res){
   if(!req.session.identity)return null;
   const now=Date.now();if(now-req.session.createdAt>config.absoluteMs||now-req.session.lastSeen>config.idleMs){await expire(req,res);return null}
-  if(now-req.session.checkedAt>=config.refreshMs||now>=req.session.tokenExpiry){
+  if(now-req.session.checkedAt>=config.refreshMs||now>=req.session.tokenExpiry-15000){
    try{
     let refresh=refreshes.get(req.sessionID);
     if(!refresh){const old=cipher.open(req.session.tokens);refresh=oidc.refresh(old.refreshToken);refreshes.set(req.sessionID,refresh);refresh.finally(()=>refreshes.delete(req.sessionID)).catch(()=>{})}
     const fresh=await refresh;const identity=identityFromClaims(fresh.claims);
     if(identity.id!==req.session.identity.id)throw new Error('Identity changed');
-    req.session.identity=identity;req.session.tokens=cipher.seal({refreshToken:fresh.refreshToken,idToken:fresh.idToken});req.session.checkedAt=now;req.session.tokenExpiry=fresh.expiresAt;
+    req.session.identity=identity;req.session.tokens=sealTokens(fresh);req.session.checkedAt=now;req.session.tokenExpiry=fresh.expiresAt;
    }catch{await expire(req,res);return null}
   }
   req.session.lastSeen=now;return req.session.identity;
@@ -59,7 +68,7 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,man
   delete req.session.flow;await save(req.session); // consume once, including failures
   try{
    const tokens=await oidc.exchange(new URL(req.originalUrl,config.origin),flow);const identity=identityFromClaims(tokens.claims);
-   await regenerate(req.session);const now=Date.now();req.session.identity=identity;req.session.tokens=cipher.seal({refreshToken:tokens.refreshToken,idToken:tokens.idToken});req.session.createdAt=now;req.session.lastSeen=now;req.session.checkedAt=now;req.session.tokenExpiry=tokens.expiresAt;req.session.csrf=randomBytes(32).toString('base64url');await save(req.session);
+   await regenerate(req.session);const now=Date.now();req.session.identity=identity;req.session.tokens=sealTokens(tokens);req.session.createdAt=now;req.session.lastSeen=now;req.session.checkedAt=now;req.session.tokenExpiry=tokens.expiresAt;req.session.csrf=randomBytes(32).toString('base64url');await save(req.session);
    const target=flow.returnTo||(identity.roles.includes('admin')?'/admin':'/portal');res.redirect(303,canAccess(identity,target)?target:'/forbidden');
   }catch{await expire(req,res);res.redirect(303,'/login?error=signin')}
  });

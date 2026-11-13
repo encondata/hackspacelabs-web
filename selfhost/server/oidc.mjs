@@ -4,7 +4,7 @@ export async function createOidc(settings){
  if(config.serverMetadata().issuer!==settings.issuer)throw new Error('OIDC issuer mismatch');
  if(!config.serverMetadata().code_challenge_methods_supported?.includes('S256'))throw new Error('OIDC server must support PKCE S256');
  const callback=settings.origin+'/api/auth/callback';
- function pack(tokens){const claims=tokens.claims();if(!claims||!tokens.refresh_token)throw new Error('OIDC identity and refresh token required');return {claims,refreshToken:tokens.refresh_token,idToken:tokens.id_token,expiresAt:Date.now()+Number(tokens.expires_in||60)*1000}}
+ function pack(tokens){const claims=tokens.claims();if(!claims||!tokens.refresh_token)throw new Error('OIDC identity and refresh token required');return {claims,accessToken:tokens.access_token,refreshToken:tokens.refresh_token,idToken:tokens.id_token,expiresAt:Date.now()+Number(tokens.expires_in||60)*1000}}
  return {
   async begin(){const verifier=oidc.randomPKCECodeVerifier();const state=oidc.randomState();const nonce=oidc.randomNonce();const challenge=await oidc.calculatePKCECodeChallenge(verifier);const url=oidc.buildAuthorizationUrl(config,{redirect_uri:callback,scope:'openid profile email',code_challenge:challenge,code_challenge_method:'S256',state,nonce});return {url:url.href,verifier,state,nonce}},
   async exchange(url,flow){return pack(await oidc.authorizationCodeGrant(config,url,{pkceCodeVerifier:flow.verifier,expectedState:flow.state,expectedNonce:flow.nonce,idTokenExpected:true}))},

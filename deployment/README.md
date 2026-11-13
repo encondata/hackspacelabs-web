@@ -9,8 +9,9 @@ The existing ChatGPT Sites URL remains a separate, owner-private demo. It does n
 - **Your existing reverse proxy** terminates HTTPS for the website and `auth.hackspacelabs.com`. Containers publish HTTP ports 8088 (web) and 8089 (auth) on `0.0.0.0` by default.
 - **Keycloak 26.8.2** owns accounts, passwords, MFA, recovery, signing keys, OAuth/OIDC clients, and SSO. Its login/reset/MFA pages inherit maintained Keycloak templates with HackSpaceLabs branding.
 - **Node 22 / Express / openid-client** serve the website and act as a backend-for-frontend. Passwords never pass through this application. OIDC authorization code + PKCE S256, state, nonce, and ID-token signature verification establish sessions.
-- **PostgreSQL** contains separate identity and website-session databases with separate database roles. It does not contain customer environment or ticket records in this release.
-- Application sessions use host-only Secure/HttpOnly/SameSite=Lax cookies. Refresh and ID tokens are encrypted before storage; they are never placed in browser local storage. The browser receives only a user profile and logout CSRF token.
+- **PostgreSQL** contains separate identity, website-session and Slipway databases with separate database roles. It does not contain customer environment or ticket records in this release.
+- **Slipway** (`apps/slipway`, Python/FastAPI) deploys GitHub repositories to Docker hosts over SSH. It runs only on the private compose network; the gateway exposes its API at `/api/slipway`. See [Slipway](#slipway-deployment-app).
+- Application sessions use host-only Secure/HttpOnly/SameSite=Lax cookies. Access, refresh and ID tokens are encrypted before storage; they are never sent to the browser or placed in browser local storage. Only the gateway sends the access token, to Slipway. The browser receives only a user profile and logout CSRF token.
 
 The identity issuer is:
 
@@ -110,9 +111,10 @@ Public account registration is disabled. Account provisioning is administrator-c
 | `GET /api/auth/session` | 401 when anonymous; otherwise returns the user profile, roles, logout CSRF token, and `sampleData: true`. Never returns OAuth tokens. |
 | `POST /api/auth/logout` | Requires exact Origin and `x-csrf-token`; deletes local session and returns the identity-provider logout URL. |
 | `GET /api/auth/account` | Requires a session, then redirects to Keycloak account management. |
+| `/api/slipway/*` | Slipway's API (`/api/v1/*`). Signed-in users need a Slipway role; writes need exact Origin and `x-csrf-token`. Requests carrying `Authorization: Bearer slipway_pat_…` are forwarded without a session. |
 | `GET /healthz` | Container-local HTTP liveness check only; blocked at the public proxy. |
 
-No production ticket/device API exists. `/api/*` paths outside authentication return 404. Do not build real customer integrations on top of the sample browser storage.
+No production ticket/device API exists. `/api/*` paths outside authentication, `/api/me`, `/api/admin` and `/api/slipway` return 404. Do not build real customer integrations on top of the sample browser storage.
 
 ## “Sign in with HackSpaceLabs” for other applications
 
@@ -126,6 +128,18 @@ Register **one OIDC client per application**, and separate production and develo
 - Request `openid profile email` and discover endpoints/JWKS from the full issuer above. Use maintained OIDC libraries and validate issuer, audience, signature, state, nonce, and token expiry.
 - Use the stable `sub` claim for identity. Create roles/scopes per application; other applications are not automatically given HackSpaceLabs administrator roles.
 - Client credentials/service accounts are a separate machine-to-machine decision and are off in these templates.
+
+## Slipway deployment app
+
+Slipway has no accounts of its own. People sign in to HackSpaceLabs; for each `/api/slipway` request the gateway attaches the person's Keycloak access token, and Slipway verifies it itself (RS256 signature against the realm JWKS, issuer, audience `slipway`, authorized party `hackspacelabs-web`, token type and expiry). Slipway mirrors each Keycloak account it sees (keyed by `sub`, never matched by email) so audit events and deployments can name who did what.
+
+- **Roles.** Client `slipway` holds the roles `admin`, `maintainer`, `developer` and `viewer`; assign them in the portal under **Identity & access → Users** (or **Groups**) **→ Slipway roles**. They reach Slipway in the `slipway_roles` claim and are re-read on every request; a role change applies at the person's next session refresh (within a minute). No Slipway role means no access: the portal hides Slipway and the gateway answers 403. The first install of this feature grants `slipway:admin` to existing portal administrators, once, while nobody holds a Slipway role; after that only administrators change roles. If every Slipway admin is lost, sign in to the Keycloak Admin Console with the bootstrap administrator in `.env` and grant `slipway` → `admin`.
+- **API tokens** (`slipway_pat_…`, created in Slipway by a signed-in person) are for scripts and CI. On use, Slipway asks the gateway whether the owner still exists and is enabled, and uses their current roles; answers are cached for 60 seconds. If the gateway or Keycloak is unreachable, token requests fail with 503 rather than succeeding. Slipway has no Keycloak admin access of its own (reading another user's client roles would need `view-clients`, which also exposes every client's secret); the gateway answers at `/internal/slipway/owners/<id>` with its management account, only for callers presenting `SLIPWAY_INTERNAL_SECRET` and never for requests that came through the reverse proxy. The example proxy configurations also answer `/internal/` with 404; do the same in yours.
+- **GitHub.** People connect GitHub so Slipway can sync their repositories and deploy with their access. Create a GitHub OAuth app with the callback `<website origin>/api/slipway/auth/github/callback` and set `SLIPWAY_GITHUB_CLIENT_ID` / `SLIPWAY_GITHUB_CLIENT_SECRET` in `.env`. Optionally set `SLIPWAY_GITHUB_SERVICE_TOKEN` for deploys by people who have not connected GitHub.
+- **Secrets.** `setup.sh` generates `SLIPWAY_DB_PASSWORD`, `SLIPWAY_SECRET_KEY`, `SLIPWAY_INTERNAL_SECRET` and `SLIPWAY_ENCRYPTION_KEY` once (also on existing installations). Back up `SLIPWAY_ENCRYPTION_KEY`: it encrypts stored SSH keys, host passwords, instance environment variables and GitHub tokens, and they cannot be recovered without it.
+- **Database.** `postgres/slipway.sh` creates the `hsl_slipway` role and database. It runs on an empty volume and again on every install, so existing installations gain the database without a reset. Slipway applies its own schema migrations on start.
+- **Using it.** Slipway appears in the portal sidebar under **Apps → Slipway**: overview, instances, deployments with live build logs, repositories, hosts (with the SSH setup snippet), and settings for GitHub, API tokens, people and the audit log. The `slipway` client is listed as internal under **Connected apps** and cannot be edited there.
+- Slipway runs as a single instance (deploys run inside its process).
 
 ## Database lifecycle, backups, and upgrades
 
