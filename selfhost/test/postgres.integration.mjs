@@ -12,7 +12,7 @@ import {startIssuer} from './oidc-fixture.mjs';
 test('PostgreSQL sessions persist across gateway instances and are deleted on logout',async()=>{
  assert.ok(process.env.TEST_DATABASE_URL,'Supply a dedicated test database URL');
  const pool=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});const fixture=await startIssuer();
- const config={production:false,origin:'http://127.0.0.1:3000',issuer:fixture.issuer,clientId:'hackspacelabs-web',clientSecret:randomBytes(32).toString('hex'),sessionSecret:randomBytes(48).toString('hex'),encryptionKey:randomBytes(32).toString('base64'),idleMs:1800000,absoluteMs:28800000,refreshMs:60000};
+ const config={production:false,origin:'http://127.0.0.1:3000',issuer:fixture.issuer,clientId:'hackspacelabs-web',clientSecret:randomBytes(32).toString('hex'),sessionSecret:randomBytes(48).toString('hex'),encryptionKey:randomBytes(32).toString('base64'),refreshMs:60000};
  const PgStore=connectPgSimple(session);const firstStore=new PgStore({pool,tableName:'web_sessions',pruneSessionInterval:false});const secondStore=new PgStore({pool,tableName:'web_sessions',pruneSessionInterval:false});
  try{
   const oidc=await createOidc(config);const make=store=>createApp({config,store,oidc,publicDir:path.resolve('selfhost/dist/public')});

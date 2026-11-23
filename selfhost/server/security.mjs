@@ -1,12 +1,24 @@
 import {createCipheriv,createDecipheriv,randomBytes,timingSafeEqual} from 'node:crypto';
-export function safeDestination(value){return value==='/admin'||value==='/portal'||value==='/me'?value:null}
-export function identityFromClaims(claims){
+import {loadSuiteApps,bareOrigin} from './suite-apps.mjs';
+// Pages served by the gateway after a server-side role check. /apps is the suite launcher (PLAN.md 1f).
+export const PAGES=['/admin','/portal','/me','/apps'];
+export function safeDestination(value){return PAGES.includes(value)?value:null}
+// Portal roles come from hsl_roles; the suite apps a person may use from hsl_apps.<app id> (that app's client roles).
+// Staff who hold only app roles may still enter the portal, for the launcher and their account page.
+export function identityFromClaims(claims,suiteApps=[]){
  if(!claims||typeof claims.sub!=='string'||!claims.sub)throw new Error('Authenticated identity required');
  const roles=Array.isArray(claims.hsl_roles)?claims.hsl_roles.filter(r=>r==='admin'||r==='customer'):[];
- if(!roles.length)throw new Error('No application role');
- return {id:claims.sub,email:typeof claims.email==='string'?claims.email:'',name:typeof claims.name==='string'&&claims.name.trim()?claims.name:typeof claims.preferred_username==='string'?claims.preferred_username:'HackSpaceLabs user',roles:[...new Set(roles)]};
+ const granted=claims.hsl_apps&&typeof claims.hsl_apps==='object'&&!Array.isArray(claims.hsl_apps)?claims.hsl_apps:{};
+ const apps=suiteApps.filter(app=>Array.isArray(granted[app.id])&&granted[app.id].some(r=>typeof r==='string'&&Object.hasOwn(app.roles,r))).map(app=>app.id);
+ if(!roles.length&&!apps.length)throw new Error('No application role');
+ return {id:claims.sub,email:typeof claims.email==='string'?claims.email:'',name:typeof claims.name==='string'&&claims.name.trim()?claims.name:typeof claims.preferred_username==='string'?claims.preferred_username:'HackSpaceLabs user',roles:[...new Set(roles)],apps};
 }
-export function canAccess(user,pathname){return pathname==='/admin'?user?.roles?.includes('admin'):(pathname==='/portal'||pathname==='/me')?user?.roles?.some(r=>r==='admin'||r==='customer'):false}
+export function canAccess(user,pathname){
+ const admin=!!user?.roles?.includes('admin'),customer=!!user?.roles?.includes('customer'),staff=(user?.apps?.length||0)>0;
+ return pathname==='/admin'?admin:pathname==='/portal'?admin||customer:pathname==='/me'?admin||customer||staff:pathname==='/apps'?admin||staff:false;
+}
+// Where a sign-in lands when no page was requested.
+export function landing(user){return user.roles.includes('admin')?'/admin':user.apps?.length?'/apps':'/portal'}
 export function equalSecret(a,b){if(typeof a!=='string'||typeof b!=='string')return false;const x=Buffer.from(a);const y=Buffer.from(b);return x.length===y.length&&timingSafeEqual(x,y)}
 export function tokenCipher(key){
  const secret=Buffer.from(key,'base64');if(secret.length!==32)throw new Error('TOKEN_ENCRYPTION_KEY must be 32 random bytes encoded as base64');
@@ -30,5 +42,8 @@ export function readConfig(env=process.env){
  if(!env.OIDC_CLIENT_SECRET||env.OIDC_CLIENT_SECRET.length<32)throw new Error('OIDC_CLIENT_SECRET must contain at least 32 characters');
  if(!env.DATABASE_URL)throw new Error('DATABASE_URL is required');
  tokenCipher(env.TOKEN_ENCRYPTION_KEY||'');
- return {production,secureCookies:production&&!lan,allowInsecureOidc:lan,origin:origin.origin,issuer:issuer.href.replace(/\/$/,''),clientId:env.OIDC_CLIENT_ID||'hackspacelabs-web',clientSecret:env.OIDC_CLIENT_SECRET,sessionSecret:env.SESSION_SECRET,encryptionKey:env.TOKEN_ENCRYPTION_KEY,databaseUrl:env.DATABASE_URL,port:Number(env.PORT||3000),host:production?'0.0.0.0':'127.0.0.1',idleMs:30*60*1000,absoluteMs:8*60*60*1000,refreshMs:60*1000};
+ // Suite apps whose origin is set appear in the launcher; the others are still recognised in tokens.
+ const suiteApps=loadSuiteApps().map(app=>({...app,url:bareOrigin(env[app.originEnv],app.originEnv)}));
+ // Sessions end when the Keycloak session does (refresh_expires_in); refreshMs is the recheck interval (D5).
+ return {production,secureCookies:production&&!lan,allowInsecureOidc:lan,origin:origin.origin,issuer:issuer.href.replace(/\/$/,''),clientId:env.OIDC_CLIENT_ID||'hackspacelabs-web',clientSecret:env.OIDC_CLIENT_SECRET,sessionSecret:env.SESSION_SECRET,encryptionKey:env.TOKEN_ENCRYPTION_KEY,databaseUrl:env.DATABASE_URL,port:Number(env.PORT||3000),host:production?'0.0.0.0':'127.0.0.1',refreshMs:60*1000,suiteApps};
 }

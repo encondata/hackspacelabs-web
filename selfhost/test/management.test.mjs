@@ -8,7 +8,7 @@ import {createOidc} from '../server/oidc.mjs';
 import {startIssuer} from './oidc-fixture.mjs';
 import {createManagement} from '../server/management.mjs';
 let issuer,config,oidc;
-before(async()=>{issuer=await startIssuer();config={production:false,origin:'http://127.0.0.1:3000',issuer:issuer.issuer,clientId:'hackspacelabs-web',clientSecret:randomBytes(32).toString('hex'),sessionSecret:randomBytes(48).toString('hex'),encryptionKey:randomBytes(32).toString('base64'),idleMs:1800000,absoluteMs:28800000,refreshMs:60000};oidc=await createOidc(config)});
+before(async()=>{issuer=await startIssuer();config={production:false,origin:'http://127.0.0.1:3000',issuer:issuer.issuer,clientId:'hackspacelabs-web',clientSecret:randomBytes(32).toString('hex'),sessionSecret:randomBytes(48).toString('hex'),encryptionKey:randomBytes(32).toString('base64'),refreshMs:60000};oidc=await createOidc(config)});
 after(()=>issuer.close());
 async function fixture(role='admin'){
  issuer.state.roles=[role];const calls=[];const state={admin:true};
