@@ -1,6 +1,7 @@
 import express from 'express';
 import {profileRouter} from './profile.mjs';
 import {managementRouter} from './management.mjs';
+import {ownersRouter} from './owners.mjs';
 import session from 'express-session';
 import helmet from 'helmet';
 import {rateLimit} from 'express-rate-limit';
@@ -31,6 +32,9 @@ export function createApp({config,store,oidc,publicDir,healthy=async()=>true,man
   if(req.path.startsWith('/api/')||PAGES.includes(req.path)||req.path==='/login')res.set('Cache-Control','no-store');
   next();
  });
+ // Internal, for Slipway and Harbor Master: is a personal API token's owner still allowed in (owners.mjs)? Mounted
+ // before the session middleware, so these calls never create sessions.
+ if(management)app.use('/internal/apps',ownersRouter({api:management,clientSecret:config.clientSecret,suiteApps,log}));
  app.get('/healthz',async(_req,res)=>{try{await healthy();res.json({status:'ok'})}catch{res.status(503).json({status:'unavailable'})}});
  app.use('/assets',express.static(path.join(publicDir,'assets'),{immutable:true,maxAge:'1y',fallthrough:false}));
  app.use(express.json({limit:'8kb'}));app.use(express.urlencoded({extended:false,limit:'8kb'}));

@@ -20,8 +20,9 @@ printf '\nAUTH_MODE=lan\nAPP_ORIGIN=http://%s:8088\nAUTH_ORIGIN=http://%s:8089\n
 docker compose -p hsl-ci-lan up -d --no-build --wait --wait-timeout 180
 docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T configure-auth
 docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T -v "$(pwd)/tests:/tests:ro" --entrypoint node configure-auth /tests/email-policy.mjs verify
-# Real sign-ins to the suite clients: hsl_roles, 96-hour / 30-day sessions, nested groups, the portal's hsl_apps.
-docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T -v "$(pwd)/tests:/tests:ro" --entrypoint node configure-auth /tests/suite-sso.mjs
+# Real sign-ins to the suite clients: hsl_roles, 96-hour / 30-day sessions, nested groups, the portal's hsl_apps,
+# and the gateway's owner check for personal API tokens.
+docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T -v "$(pwd)/tests:/tests:ro" -e GATEWAY_URL=http://web:3000 --entrypoint node configure-auth /tests/suite-sso.mjs
 # A rerun of the installer keeps an administrator's session lengths and does not repeat the first-rollout grants.
 rerun=$(docker compose -p hsl-ci-lan --profile tools run --rm --no-deps -T configure-auth)
 printf '%s\n' "$rerun"

@@ -93,6 +93,19 @@ try{
   const portalClaims=claims(portal.id_token);
   assert.deepEqual(portalClaims.hsl_apps,{switchyard:['admin']});assert.equal(portalClaims.hsl_roles,undefined);
   console.log('Portal ID token carries hsl_apps {"switchyard":["admin"]} for a person with no portal role.');
+  // 5. The gateway's owner check for personal API tokens (PLAN.md 1i), through the real management account.
+  if(process.env.GATEWAY_URL){
+    await api('/users/'+user.id+'/groups/'+infra.id,'PUT');
+    const owner=(app,secret=secretOf(app),headers={})=>fetch(process.env.GATEWAY_URL+'/internal/apps/'+app+'/owners/'+user.id,{headers:{Authorization:'Bearer '+secret,...headers},signal:AbortSignal.timeout(10000)});
+    const answer=async app=>{const response=await owner(app);assert.equal(response.status,200,app+' owner check');return response.json()};
+    assert.deepEqual(await answer('switchyard'),{enabled:true,roles:['admin','editor']},'direct and group roles');
+    assert.deepEqual(await answer('tideline'),{enabled:true,roles:['viewer']},'a role from the group above');
+    assert.deepEqual(await answer('slipway'),{enabled:true,roles:[]});
+    for(const [app,secret,headers] of [['switchyard','wrong',{}],['switchyard',secretOf('tideline'),{}],['switchyard',secretOf('switchyard'),{'X-Forwarded-For':'203.0.113.9'}]])assert.equal((await owner(app,secret,headers)).status,404,'refused: '+app);
+    await api('/users/'+user.id,'PUT',{enabled:false});
+    assert.deepEqual(await answer('switchyard'),{enabled:false,roles:['admin','editor']},'a disabled account says so');
+    console.log('Gateway owner check: enabled and effective roles per app (groups included), disabled accounts reported, wrong secrets and proxied calls refused.');
+  }
 }finally{
   for(const g of created.slice(0,1))await api('/groups/'+g.id,'DELETE').catch(()=>{});
   await api('/users/'+user.id,'DELETE').catch(()=>{});
