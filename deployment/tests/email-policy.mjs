@@ -1,5 +1,5 @@
 // Isolated CI realm only. Seed the old email gate, then verify migration removes it.
-const base='http://keycloak:8080';
+const base=process.env.KEYCLOAK_URL||'http://keycloak:8080';
 const response=await fetch(base+'/realms/master/protocol/openid-connect/token',{method:'POST',body:new URLSearchParams({grant_type:'password',client_id:'admin-cli',username:process.env.ADMIN_USERNAME,password:process.env.ADMIN_PASSWORD})});
 if(!response.ok)throw new Error('Test administrator login failed');
 const token=(await response.json()).access_token;
@@ -31,6 +31,37 @@ if(process.argv[2]==='seed'){
  if(!(await api('/clients/'+android.id+'/scope-mappings/realm')).some(role=>role.name==='offline_access'))throw new Error('Android app tokens cannot carry offline_access');
  if(!(await api('/users/'+admin.id+'/role-mappings/realm/composite')).some(role=>role.name==='offline_access'))throw new Error('Seeded admin cannot get offline tokens');
  console.log('Android app public client verified.');
+ // HSL Suite apps (PLAN.md 1b, 1c, 1f): every app whose origin is set has its client, roles, mapper and derived secret.
+ const {createHmac}=await import('node:crypto');const {existsSync,readFileSync}=await import('node:fs');const {fileURLToPath}=await import('node:url');
+ const registry=JSON.parse(readFileSync(['/tools/suite-apps.json',fileURLToPath(new URL('../suite-apps.json',import.meta.url))].find(file=>existsSync(file)),'utf8'));
+ const suiteRealm=await api('');
+ const policy={rememberMe:true,ssoSessionIdleTimeout:345600,ssoSessionMaxLifespan:345600,ssoSessionIdleTimeoutRememberMe:2592000,ssoSessionMaxLifespanRememberMe:2592000,clientSessionIdleTimeout:0,clientSessionMaxLifespan:0};
+ for(const [key,value] of Object.entries(policy))if(suiteRealm[key]!==value)throw new Error('Session policy not applied: '+key);
+ if(suiteRealm.attributes?.['hsl.sessionPolicy']!=='1')throw new Error('Session policy marker missing');
+ const [web]=await api('/clients?clientId=hackspacelabs-web');const webMappers=await api('/clients/'+web.id+'/protocol-mappers/models');
+ let checked=0;
+ for(const app of registry){
+  const origin=(process.env[app.originEnv]||'').replace(/\/+$/,'');
+  const [client]=await api('/clients?clientId='+app.id);
+  if(!origin){console.log(app.originEnv+' not set in this run; '+app.id+' not checked.');continue}
+  if(!client)throw new Error(app.id+' client is missing');
+  const c=await api('/clients/'+client.id);
+  if(c.publicClient||!c.standardFlowEnabled||c.directAccessGrantsEnabled||c.implicitFlowEnabled||c.serviceAccountsEnabled||c.fullScopeAllowed||JSON.stringify(c.redirectUris)!==JSON.stringify([origin+app.callbackPath])||c.attributes?.['pkce.code.challenge.method']!=='S256'||c.attributes?.['post.logout.redirect.uris']!==origin+'/signed-out')throw new Error(app.id+' client is misconfigured');
+  if((await api('/clients/'+client.id+'/client-secret')).value!==createHmac('sha256',process.env.OIDC_CLIENT_SECRET).update(app.id+'-v1').digest('hex'))throw new Error(app.id+' client secret is not the derived value');
+  const roles=(await api('/clients/'+client.id+'/roles')).map(role=>role.name);
+  if(Object.keys(app.roles).some(name=>!roles.includes(name)))throw new Error(app.id+' roles are missing');
+  const mappers=(await api('/clients/'+client.id+'/protocol-mappers/models')).filter(m=>m.config?.['claim.name']==='hsl_roles');
+  if(mappers.length!==1||mappers[0].name!=='HSL app roles'||mappers[0].config['usermodel.clientRoleMapping.clientId']!==app.id||mappers[0].config.multivalued!=='true'||mappers[0].config['id.token.claim']!=='true')throw new Error(app.id+' hsl_roles mapper is missing or wrong');
+  const scopes=(await api('/clients/'+client.id+'/default-client-scopes')).map(scope=>scope.name);
+  if(['basic','profile','email'].some(name=>!scopes.includes(name)))throw new Error(app.id+' default scopes are missing');
+  if(!webMappers.some(m=>m.config?.['claim.name']==='hsl_apps.'+app.id))throw new Error('Portal client has no hsl_apps mapper for '+app.id);
+  const scoped=(await api('/clients/'+web.id+'/scope-mappings/clients/'+client.id)).map(role=>role.name);
+  if(Object.keys(app.roles).some(name=>!scoped.includes(name)))throw new Error('Portal client is not scoped to '+app.id+' roles');
+  if(suiteRealm.attributes?.['hsl.firstGrant.'+app.id]!=='1')throw new Error(app.id+' first-rollout grant did not run');
+  if(!(await api('/users/'+admin.id+'/role-mappings/clients/'+client.id+'/composite')).some(role=>role.name==='admin'))throw new Error('Seeded portal admin did not get the '+app.id+' admin role');
+  checked++;
+ }
+ console.log('Suite app clients verified: '+checked+' (client, roles, hsl_roles mapper, derived secret, portal mapping, first-rollout grant) and the 96-hour / 30-day session policy.');
 }
 
 // Exercise the actual realm-scoped service account and the routes used by the portal.
