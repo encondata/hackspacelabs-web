@@ -40,6 +40,13 @@ const settings={
   HSL_PORTAL_URL:portal,
   HSL_SUITE_APPS:apps,
 };
+// Slipway and Harbor Master tie API tokens to a person, so they ask this site's gateway whether a token's owner
+// still has access (PLAN.md D18, selfhost/server/owners.mjs). That call must reach the gateway directly, never
+// through the proxy, which refuses it. PORTAL_INTERNAL_URL names that address; in LAN mode the site's own
+// address already is the gateway. Without it the owner check stays off and the app says so at start.
+const personalTokens=new Set(['slipway','harbormaster']);
+const portalInternal=origin(deployment.PORTAL_INTERNAL_URL,'PORTAL_INTERNAL_URL')||(deployment.AUTH_MODE==='lan'?portal:null);
+if(personalTokens.has(app.id))settings.HSL_PORTAL_INTERNAL_URL=portalInternal||'';
 const contents=existsSync(target)?readFileSync(target,'utf8'):'';
 const current=parse(contents);
 // The app's own address. Switchyard and Tideline get new variables nobody else sets (without them SSO stays off).
@@ -61,5 +68,6 @@ try{writeFileSync(temporary,next,{mode:0o600,flag:'wx'});renameSync(temporary,ta
 if((statSync(target).mode&0o077)!==0)fail('Could not make '+target+' private (mode 600)');
 console.log('Wrote '+Object.keys(settings).join(', ')+' to '+target+'.');
 if(!ownAddress.has(app.publicUrlEnv))console.log(app.publicUrlEnv+' already matches '+app.originEnv+'.');
+if(personalTokens.has(app.id)&&!portalInternal)console.log('No PORTAL_INTERNAL_URL in deployment/.env, so '+app.name+' cannot check whether an API token\'s owner still has access. Set it to the gateway\'s direct address, e.g. http://192.168.1.10:8088, and run this again.');
 if(app.id==='switchyard'&&!current.CPM_SECRET_KEY)console.log('Switchyard\'s .env has no CPM_SECRET_KEY. HackSpaceLabs sign-in stays off until it has one (32 random bytes, base64; its installer normally writes it).');
 console.log('Restart '+app.name+' to use them.');
