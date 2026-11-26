@@ -128,6 +128,8 @@ Access is managed in the portal under **Identity & access**: give app roles to p
 
 **Owner check for personal API tokens.** Slipway and Harbor Master accept personal API tokens without a Keycloak session, so for an owner who signs in through HackSpaceLabs they ask the gateway whether that person is still enabled and still holds a role: `GET /internal/apps/<app id>/owners/<Keycloak user id>` with `Authorization: Bearer <that app's HSL_OIDC_CLIENT_SECRET>`. The answer is only `{"enabled": true|false, "roles": [...]}` (the app's effective roles, groups included, highest first; `[]` means no access; unknown, deleted and service accounts are `enabled: false`). Keycloak trouble is a `503`. Call the gateway directly (`http://<server>:<WEB_PORT>`), never through the public proxy: requests with forwarding headers, wrong secrets and unknown apps all get a plain `404`, and the proxy templates refuse `/internal/`.
 
+The apps find the gateway through `HSL_PORTAL_INTERNAL_URL`, which `app-env.mjs` writes for Slipway and Harbor Master: from `PORTAL_INTERNAL_URL` in `deployment/.env` (set it to the gateway's direct address, e.g. `http://192.168.1.10:8088`), or from this site's own address in LAN mode. Without it the apps run with the owner check off and say so at start; personal API tokens of people disabled in the portal then keep working until they are deactivated in the app too.
+
 ## “Sign in with HackSpaceLabs” for other applications
 
 Register **one OIDC client per application**, and separate production and development clients. A starting template is `clients/web-app.example.json`. Replace its example hosts before importing it into Keycloak; it is not imported automatically.
