@@ -61,3 +61,26 @@ test('sync copies the kit without the demo, and --check catches edits',t=>{
  assert.equal(run('--check',dest).status,1,'an added file is drift too');
  assert.equal(spawnSync('bash',[sync,'v1',dest],{encoding:'utf8'}).status,2,'bad tag refused');
 });
+
+test('kit classes on a <button> set their own hover colours, so an app button:hover cannot show through',()=>{
+ const rules=[...code('shell.css').matchAll(/([^{}]+)\{([^}]*)\}/g),...code('auth.css').matchAll(/([^{}]+)\{([^}]*)\}/g)];
+ const hover=sel=>rules.filter(([,s])=>s.split(',').map(x=>x.trim()).includes(sel)).map(([,,body])=>body).join(';');
+ for(const sel of ['.hsl-auth-link:hover','.hsl-auth-button:hover','.hsl-userbtn:hover','.hsl-iconbtn:hover','.hsl-menu-item:hover']){
+  const body=hover(sel);
+  for(const prop of ['background','border-color','color'])assert.match(body,new RegExp(`(^|[;\\s])${prop}\\s*:`),sel+' sets no '+prop);
+ }
+ for(const sel of ['.hsl-brand:hover','.hsl-nav-item:hover','.hsl-switcher-app:hover','.hsl-menu-item:hover','.hsl-auth-button:hover'])
+  assert.match(hover(sel),/text-decoration\s*:\s*none/,sel+' may underline under an app a:hover rule');
+ const nav=hover('.hsl-nav-item:hover');
+ for(const prop of ['background','color'])assert.match(nav,new RegExp(`(^|[;\\s])${prop}\\s*:`),'.hsl-nav-item:hover sets no '+prop);
+});
+
+test('the user menu takes avatar-url and compact-below, and the touch icon is a 180 px PNG',()=>{
+ const js=code('suite.js');
+ assert.match(js,/'avatar-url'/);assert.match(js,/'compact-below'/);
+ assert.match(js,/safeUrl\(this\.getAttribute\('avatar-url'\)\)/,'the photo address goes through safeUrl');
+ assert.match(code('shell.css'),/hsl-user-menu\[data-hsl-compact\] \.hsl-userbtn-name/);
+ const png=readFileSync(path.join(ui,'apple-touch-icon.png'));
+ assert.equal(png.subarray(1,4).toString(),'PNG');
+ assert.equal(png.readUInt32BE(16),180);assert.equal(png.readUInt32BE(20),180);
+});
