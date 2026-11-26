@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The strictest policy any suite app uses (Tideline's): the kit must work under it. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; font-src 'self'; script-src 'self'; base-uri 'none'; form-action 'self'">
+<title>HSL Suite kit demo</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="fonts.css">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="shell.css">
+<link rel="stylesheet" href="auth.css">
+<link rel="stylesheet" href="demo.css">
+<script src="suite.js"></script>
+<script src="demo.js" defer></script>
+</head>
+<body>
+<!-- Demo controls: not part of the kit. -->
+<div class="demo-bar" role="toolbar" aria-label="Demo views">
+  <strong>HSL Suite kit <span id="demo-version"></span></strong>
+  <button type="button" data-view="frame" aria-pressed="true">App frame</button>
+  <button type="button" data-view="signin" aria-pressed="false">Sign in</button>
+  <button type="button" data-view="signedout" aria-pressed="false">Signed out</button>
+  <button type="button" data-view="noaccess" aria-pressed="false">No access</button>
+  <button type="button" data-view="tokens" aria-pressed="false">Tokens</button>
+  <button type="button" id="demo-theme">Dark mode: off</button>
+  <button type="button" id="demo-contrast">Check contrast</button>
+  <output id="demo-result" aria-live="polite"></output>
+</div>
+
+<!-- ============================================================ the app frame -->
+<section data-demo="frame">
+  <a class="hsl-skip" href="#main">Skip to content</a>
+  <div class="hsl-shell">
+    <aside class="hsl-sidebar">
+      <a class="hsl-brand" href="#" aria-label="Tideline home">
+        <img class="hsl-mark" src="mark.svg" width="34" height="32" alt="">
+        <span class="hsl-wordmark">Tideline</span>
+      </a>
+      <nav class="hsl-nav" aria-label="Main">
+        <div class="hsl-nav-group">
+          <a class="hsl-nav-item" href="#" aria-current="page"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>Search</a>
+          <a class="hsl-nav-item" href="#"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>Analytics</a>
+          <a class="hsl-nav-item" href="#"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Sources<span class="hsl-nav-badge">3</span></a>
+        </div>
+        <div class="hsl-nav-group">
+          <div class="hsl-nav-label">Administration</div>
+          <a class="hsl-nav-item" href="#"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-7 7-7s7 3 7 7"/></svg>Users</a>
+          <a class="hsl-nav-item" href="#"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>API tokens</a>
+          <a class="hsl-nav-item" href="#"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Status</a>
+        </div>
+      </nav>
+    </aside>
+    <div class="hsl-main">
+      <header class="hsl-topbar">
+        <div class="hsl-topbar-title"><a href="#">Tideline</a><span class="hsl-topbar-sep" aria-hidden="true">/</span><strong>Search</strong></div>
+        <div class="hsl-topbar-end">
+          <hsl-app-switcher id="demo-switcher" current="tideline"></hsl-app-switcher>
+          <hsl-user-menu id="demo-user" name="Jimmy Henderson" detail="Admin · signed in with HackSpaceLabs" profile-url="https://hackspacelabs.com/me"></hsl-user-menu>
+        </div>
+      </header>
+      <main class="hsl-content" id="main" tabindex="-1">
+        <div class="demo-head">
+          <div>
+            <h1>Search</h1>
+            <p class="demo-muted">Last 15 minutes, all sources. App pages keep their own components; these pick up the shared tokens.</p>
+          </div>
+          <button type="button" class="demo-button is-primary">Save search</button>
+        </div>
+        <div class="demo-card">
+          <table class="demo-table">
+            <caption class="demo-muted">Sources</caption>
+            <thead><tr><th scope="col">Source</th><th scope="col">Host</th><th scope="col">Lines today</th><th scope="col">Status</th></tr></thead>
+            <tbody>
+              <tr><td>switchyard</td><td>unraid</td><td>182,401</td><td><span class="demo-pill is-ok">Receiving</span></td></tr>
+              <tr><td>slipway</td><td>unraid</td><td>9,112</td><td><span class="demo-pill is-warn">Quiet for 2 h</span></td></tr>
+              <tr><td>cardporch</td><td>droplet-2</td><td>0</td><td><span class="demo-pill is-bad">No data</span></td></tr>
+              <tr><td>keycloak</td><td>unraid</td><td>3,870</td><td><span class="demo-pill">Paused</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <pre class="demo-log"><span class="demo-muted">09:41:02</span> unraid slipway      deploy finished in 41s
+<span class="demo-muted">09:41:07</span> unraid switchyard   config applied, 14 hosts
+<span class="demo-warn">09:42:13 unraid keycloak     WARN login failure for user "guest"</span>
+<span class="demo-bad">09:42:55 unraid cardporch    ERROR upstream timed out</span></pre>
+        <div class="demo-row">
+          <button type="button" class="demo-button">Secondary</button>
+          <button type="button" class="demo-button is-primary">Primary</button>
+          <a href="#">A link</a>
+          <code>tdt_ab12…</code>
+        </div>
+      </main>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ sign in -->
+<section data-demo="signin" hidden>
+  <div class="hsl-auth">
+    <div class="hsl-auth-card">
+      <div class="hsl-auth-brand"><img class="hsl-mark" src="mark.svg" width="44" height="41" alt=""><span class="hsl-wordmark">Switchyard</span></div>
+      <h1 class="hsl-auth-title">Sign in</h1>
+      <p class="hsl-auth-alert" role="alert">HackSpaceLabs sign-in can’t be reached right now. Administrators can use a local account below.</p>
+      <a class="hsl-auth-button is-sso" href="#"><img class="hsl-mark" src="mark.svg" width="20" height="19" alt="">Sign in with HackSpaceLabs</a>
+      <div class="hsl-auth-divider">or with a local account</div>
+      <form class="hsl-auth-form" action="#">
+        <label class="hsl-auth-field">Username<input class="hsl-auth-input" name="username" autocomplete="username" required></label>
+        <label class="hsl-auth-field">Password<input class="hsl-auth-input" name="password" type="password" autocomplete="current-password" required></label>
+        <label class="hsl-auth-check"><input type="checkbox" name="remember">Keep me signed in on this device</label>
+        <button class="hsl-auth-button is-primary" type="submit">Sign in</button>
+      </form>
+      <p class="hsl-auth-note">One sign-in for Slipway, Switchyard, Harbor Master and Tideline.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ signed out -->
+<section data-demo="signedout" hidden>
+  <div class="hsl-auth">
+    <div class="hsl-auth-card">
+      <div class="hsl-auth-brand"><img class="hsl-mark" src="mark.svg" width="44" height="41" alt=""><span class="hsl-wordmark">Harbor Master</span></div>
+      <h1 class="hsl-auth-title">You’re signed out of HackSpaceLabs</h1>
+      <p class="hsl-auth-text">You’re signed out of Harbor Master and the other HackSpaceLabs apps.</p>
+      <a class="hsl-auth-button is-sso" href="#"><img class="hsl-mark" src="mark.svg" width="20" height="19" alt="">Sign in with HackSpaceLabs</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ no access -->
+<section data-demo="noaccess" hidden>
+  <div class="hsl-auth">
+    <div class="hsl-auth-card">
+      <div class="hsl-auth-brand"><img class="hsl-mark" src="mark.svg" width="44" height="41" alt=""><span class="hsl-wordmark">Slipway</span></div>
+      <h1 class="hsl-auth-title">No access</h1>
+      <p class="hsl-auth-alert is-warn" role="alert">Your HackSpaceLabs account doesn’t have access to Slipway. Ask an administrator.</p>
+      <a class="hsl-auth-button is-sso" href="#"><img class="hsl-mark" src="mark.svg" width="20" height="19" alt="">Try again</a>
+      <button type="button" class="hsl-auth-link">Use a different HackSpaceLabs account</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ tokens -->
+<section data-demo="tokens" hidden>
+  <main class="demo-tokens">
+    <h1>Tokens</h1>
+    <p class="demo-muted">Every colour token from <code>tokens.css</code>, in the current theme.</p>
+    <div class="demo-swatches" id="demo-swatches"></div>
+  </main>
+</section>
+</body>
+</html>
