@@ -18,7 +18,7 @@ function source(s:RecordData,selfId?:string){return s.type==='direct'?'granted d
 export function AccessTable({access,selfId,empty}:{access:RecordData[];selfId?:string;empty:string}){
  const held=(access||[]).filter(a=>a.role);
  if(!held.length)return <p className="ia-hint">{empty}</p>;
- return <table className="ia-access"><thead><tr><th scope="col">App</th><th scope="col">Role used</th><th scope="col">Where it comes from</th></tr></thead><tbody>{held.map(a=><tr key={a.app}><td>{a.name}</td><td>{a.role}</td><td>{a.roles.map((r:RecordData)=><small key={r.name}>{r.name}: {r.sources.map((s:RecordData)=>source(s,selfId)).join('; ')}</small>)}</td></tr>)}</tbody></table>;
+ return <div className="ia-table-wrap"><table className="ia-access"><thead><tr><th scope="col">App</th><th scope="col">Role used</th><th scope="col">Where it comes from</th></tr></thead><tbody>{held.map(a=><tr key={a.app}><td>{a.name}</td><td>{a.role}</td><td>{a.roles.map((r:RecordData)=><small key={r.name}>{r.name}: {r.sources.map((s:RecordData)=>source(s,selfId)).join('; ')}</small>)}</td></tr>)}</tbody></table></div>;
 }
 // Direct app roles of a person or a group, one form per installed app.
 export function AppRoles({kind,record,apps,api,run,onSaved}:{kind:'users'|'groups';record:RecordData;apps:RecordData[];api:Api;run:Run;onSaved:()=>Promise<void>}){
@@ -63,5 +63,5 @@ export function AppAccessView({apps,api}:{apps:RecordData[];api:Api}){
  return <section className="p-panel ia-detail"><label>App<select value={app} onChange={e=>setApp(e.target.value)}>{installed.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
  <p className="ia-hint">{entry?.roles.map((r:RecordData)=>r.name+': '+String(r.description||'').replace(new RegExp('^'+entry.name+': '),'')).join(' · ')}</p>
  {error&&<div className="ia-error" role="alert">{error}</div>}
- {!data?<p role="status" className="ia-loading">Loading access…</p>:data.people.length?<table className="ia-access"><thead><tr><th scope="col">Person</th><th scope="col">Role used</th><th scope="col">Where it comes from</th></tr></thead><tbody>{data.people.map((p:RecordData)=><tr key={p.id}><td>{p.username}{p.enabled?'':' (disabled)'}</td><td>{p.role}</td><td>{p.roles.map((r:RecordData)=><small key={r.name}>{r.name}: {r.sources.map((s:RecordData)=>source(s)).join('; ')}</small>)}</td></tr>)}</tbody></table>:<p className="ia-hint">Nobody has access to {entry?.name} yet.</p>}</section>;
+ {!data?<p role="status" className="ia-loading">Loading access…</p>:data.people.length?<div className="ia-table-wrap"><table className="ia-access"><thead><tr><th scope="col">Person</th><th scope="col">Role used</th><th scope="col">Where it comes from</th></tr></thead><tbody>{data.people.map((p:RecordData)=><tr key={p.id}><td>{p.username}{p.enabled?'':' (disabled)'}</td><td>{p.role}</td><td>{p.roles.map((r:RecordData)=><small key={r.name}>{r.name}: {r.sources.map((s:RecordData)=>source(s)).join('; ')}</small>)}</td></tr>)}</tbody></table></div>:<p className="ia-hint">Nobody has access to {entry?.name} yet.</p>}</section>;
 }

@@ -14,6 +14,11 @@
 .ia-tree{list-style:none;margin:0;padding:0}
 .ia-tree .ia-tree{padding-left:16px;border-left:1px solid var(--border);margin-left:18px}
 .ia-access{width:100%;border-collapse:collapse;font-size:14px}
+/* Narrow screens: the table scrolls sideways inside its card instead of breaking names mid-word. */
+.ia-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.ia-access th,.ia-access td:not(:last-child){white-space:nowrap}
+.ia-access td{overflow-wrap:normal}
+.ia-access td:last-child{min-width:12rem}
 .ia-access th,.ia-access td{text-align:left;padding:10px 8px;border-top:1px solid var(--border);vertical-align:top}
 .ia-access th{font-weight:600;font-size:12px;color:var(--muted);background:var(--surface-2)}
 .ia-access td{color:var(--text)}
