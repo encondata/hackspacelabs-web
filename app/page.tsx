@@ -1,8 +1,11 @@
+import {markUrl} from './portal/suite-widgets';
+
+// The public homepage. Its layout is its own; its colours and fonts are the HSL Suite kit's tokens (PLAN.md D13).
 export default function Home() {
-  return <>
+  return <div className="site">
     <a className="skip" href="#main">Skip to content</a>
     <header className="header wrap">
-      <a href="/" className="brand" aria-label="HackSpaceLabs home"><img src="/hackspacelabs-logo.png" alt="HackSpaceLabs — Build, Explore, Connect" /></a>
+      <a href="/" className="brand" aria-label="HackSpaceLabs home"><img className="hsl-mark" src={markUrl} width={50} height={46} alt="" /><span><span className="hsl-wordmark">HackSpaceLabs</span><small>Build · Explore · Connect</small></span></a>
       <nav aria-label="Main navigation"><a href="#approach">What we do</a><a href="#about">About the lab</a><a href="/login" className="login">Log in <span aria-hidden="true">↗</span></a></nav>
     </header>
     <main id="main">
@@ -20,5 +23,5 @@ export default function Home() {
       <section className="portal wrap"><div><p className="eyebrow">YOUR SPACE AT HACKSPACELABS</p><h2>Already part of the journey?</h2><p>Your next stop is right here.</p></div><a className="button secondary" href="/login">Go to login <span aria-hidden="true">↗</span></a></section>
     </main>
     <footer className="wrap footer"><span>© {new Date().getFullYear()} HackSpaceLabs</span><span>BUILD <b>•</b> EXPLORE <b>•</b> CONNECT</span><a href="#main">Back to top ↑</a></footer>
-  </>;
+  </div>;
 }

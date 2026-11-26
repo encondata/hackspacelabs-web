@@ -40,6 +40,13 @@ To switch to the configured HTTPS hostnames later, rerun the same installer with
 
 The authentication protocol and PostgreSQL session tests passed during development, and the production frontend builds. GitHub CI validates both Docker builds, offline web startup, real Keycloak realm import, existing-realm URL migration, and the LAN OIDC authorization redirect. Full browser password-change/MFA flows and public HTTPS login still require deployment verification. Fresh installations seed the website account **`admin` / `123456`** with a mandatory password change. The only required first-login action is changing the temporary password. No email address, profile form, verification email, or SMTP server is required. Infrastructure credentials remain randomly generated.
 
+## HSL Suite kit
+
+`ui/` is the look shared by this site and the HSL Suite apps (Slipway, Switchyard, Harbor Master,
+Tideline): tokens, the app frame, the sign-in card, the app switcher and user menu, the H mark and the
+fonts. `ui/README.md` describes it, and `ui/demo.html` shows every piece in light and dark. Apps copy it
+in at a release tag (`ui-vX.Y.Z`) with `scripts/sync-hsl-ui.sh`.
+
 ## Development checks
 
 ```sh
