@@ -40,7 +40,7 @@ test('Slipway and Harbor Master keep their own address and stop when it differs 
  writeFileSync(target,'SLIPWAY_BASE_URL="https://slipway.example/"\nPUBLIC_URL=https://harbormaster.example\n');
  assert.equal(run('slipway',target).status,0);assert.equal(run('harbormaster',target).status,0);
  const written=values(readFileSync(target,'utf8'));
- assert.equal(written.SLIPWAY_BASE_URL,'"https://slipway.example/"');assert.equal(written.HSL_PORTAL_INTERNAL_URL,'');assert.equal(written.HSL_OIDC_CLIENT_ID,'harbormaster');assert.equal(written.PUBLIC_URL,'https://harbormaster.example');
+ assert.equal(written.SLIPWAY_BASE_URL,'"https://slipway.example/"');assert.equal(written.HSL_PORTAL_INTERNAL_URL,undefined,'not written when unknown');assert.equal(written.HSL_OIDC_CLIENT_ID,'harbormaster');assert.equal(written.PUBLIC_URL,'https://harbormaster.example');
 });
 test('unknown apps, unset origins and malformed origins are refused',t=>{
  const {run,target}=setup(t,'TIDELINE_ORIGIN=https://tideline.example/path\n');
@@ -58,5 +58,8 @@ test('Slipway and Harbor Master get the gateway address for the owner check; Swi
  assert.equal(lan.run('slipway',lan.target).status,0);assert.equal(values(readFileSync(lan.target,'utf8')).HSL_PORTAL_INTERNAL_URL,'https://hackspacelabs.example');
  const none=setup(t,'SLIPWAY_ORIGIN=https://slipway.example\n','SLIPWAY_BASE_URL=https://slipway.example\n');
  assert.match(none.run('slipway',none.target).stdout,/No PORTAL_INTERNAL_URL/);
+ const kept=setup(t,'SLIPWAY_ORIGIN=https://slipway.example\n','SLIPWAY_BASE_URL=https://slipway.example\nHSL_PORTAL_INTERNAL_URL=http://10.0.0.5:8088\n');
+ assert.match(kept.run('slipway',kept.target).stdout,/left as it is/);
+ assert.equal(values(readFileSync(kept.target,'utf8')).HSL_PORTAL_INTERNAL_URL,'http://10.0.0.5:8088','a value set by hand is kept');
  assert.match(setup(t,'PORTAL_INTERNAL_URL=http://x/path\nSLIPWAY_ORIGIN=https://slipway.example\n','SLIPWAY_BASE_URL=https://slipway.example\n').run('slipway',target).stderr,/must be an origin/);
 });
