@@ -113,6 +113,12 @@ html.login-pf,
   margin-bottom: 0.85rem;
 }
 
+/* The buttons end the card: no gap below them (the sign-out page nests them in a second group). */
+.login-pf #kc-form-buttons,
+.login-pf form > .form-group:last-child {
+  margin-bottom: 0;
+}
+
 .login-pf .instruction,
 #kc-info-message,
 .login-pf .content-area p {
