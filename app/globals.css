@@ -45,10 +45,10 @@ a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-off
 .poster-top{display:flex;justify-content:space-between;font-size:10px;letter-spacing:1px;padding-bottom:24px;border-bottom:1px solid var(--border-strong)}
 .poster-top span:first-child{font-weight:700}
 .poster-top span:last-child{letter-spacing:0}
-/* Outfit, the wordmark face: Inter Variable's overlapping contours show through the outline's stroke. */
 .poster-words{padding:27px 0 31px;font-family:var(--font-brand);font-size:clamp(50px,5.9vw,82px);font-weight:700;letter-spacing:-3px;line-height:1.13}
-.outline{color:transparent;-webkit-text-stroke:1.2px var(--logo-ink)}
-.outline span{-webkit-text-stroke:0;color:var(--orange)}
+/* Outlined word: the poster's colour ringed by shadows. A text stroke would trace every overlapping contour of the variable fonts. */
+.outline{--ring:var(--logo-ink);color:var(--surface);text-shadow:1.2px 0 var(--ring),-1.2px 0 var(--ring),0 1.2px var(--ring),0 -1.2px var(--ring),.85px .85px var(--ring),-.85px -.85px var(--ring),.85px -.85px var(--ring),-.85px .85px var(--ring)}
+.outline span{color:var(--orange);text-shadow:none}
 .poster-bottom{border-top:1px solid var(--border-strong);padding-top:22px;display:flex;justify-content:space-between;align-items:end;font-size:12px;line-height:1.5}
 /* The H mark's band colours. */
 .swatches{display:flex;gap:5px}
