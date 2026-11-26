@@ -28,7 +28,8 @@
   },
   "include": [
     "app/**/*.tsx",
-    "selfhost/web/**/*.tsx"
+    "selfhost/web/**/*.tsx",
+    "ui/hsl-suite.d.ts"
   ],
   "exclude": [
     "node_modules",
