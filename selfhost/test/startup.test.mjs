@@ -12,7 +12,7 @@ import request from 'supertest';
 import {deferredOidc} from '../server/deferred-oidc.mjs';
 import {createApp} from '../server/app.mjs';
 
-const settings=()=>({production:true,origin:'https://web.not-configured.invalid',issuer:'https://auth.not-configured.invalid/realms/hackspacelabs',sessionSecret:randomBytes(48).toString('hex'),encryptionKey:randomBytes(32).toString('base64'),idleMs:1800000});
+const settings=()=>({production:true,origin:'https://web.not-configured.invalid',issuer:'https://auth.not-configured.invalid/realms/hackspacelabs',sessionSecret:randomBytes(48).toString('hex'),encryptionKey:randomBytes(32).toString('base64')});
 
 test('OIDC discovery is deferred, shared, and retried after DNS failure',async()=>{
   let attempts=0;

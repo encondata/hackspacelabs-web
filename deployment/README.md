@@ -24,7 +24,7 @@ The `/realms/hackspacelabs` suffix is part of the issuer identifier. Other appli
 
 ## Deployment on an internal server or DigitalOcean droplet
 
-Use a Linux host with Docker Engine, Docker Compose v2+, Git, Bash, and OpenSSL. Node is not needed on the host: Docker builds the application. Python 3 is only needed for the installer tests. The script does not install system packages or change your reverse proxy.
+Use a Linux host with Docker Engine, Docker Compose v2+, Git, Bash, and OpenSSL. Docker builds the application, so Node is only needed on the host to run `scripts/app-env.mjs` for the HSL Suite apps, and even that can run in Docker (see below). Python 3 is only needed for the installer tests. The script does not install system packages or change your reverse proxy.
 
 ```sh
 curl -fL https://raw.githubusercontent.com/encondata/hackspacelabs-web/main/install.sh -o /tmp/hackspacelabs-install.sh
@@ -95,8 +95,8 @@ Public account registration is disabled. Account provisioning is administrator-c
 
 ## Role checks, sessions, and logout
 
-- `/admin` and `/portal` are authorized on the server before the HTML is served. The frontend also checks the session and hides the admin link for customers.
-- The session idle timeout is 30 minutes and its absolute lifetime is 8 hours. Refresh tokens are revalidated at most every 60 seconds on authenticated requests; the open dashboard also polls the session every minute. Role removal or Keycloak session revocation takes effect at the next refresh check, not instantaneously. If the identity service cannot refresh the session, access fails closed and a new login is required.
+- `/admin`, `/portal`, `/me` and `/apps` are authorized on the server before the HTML is served. The frontend also checks the session and hides the admin link for customers. A sign-in is accepted with a portal role (`admin`, `customer`) **or** a role in at least one suite app; staff who only hold app roles may open `/apps` and `/me`. After sign-in, administrators land on `/admin`, app staff on `/apps`, customers on `/portal`.
+- A portal session lasts exactly as long as the Keycloak session behind it: 96 hours from sign-in, or 30 days when "Remember me" was ticked (Keycloak's `refresh_expires_in`; 96 hours if Keycloak does not say). Being inactive does not end it sooner. The cookie's expiry is set to the same moment and is not extended by activity. Refresh tokens are revalidated at most every 60 seconds on authenticated requests; the open dashboard also polls the session every minute. Sign-out elsewhere, a disabled account, role removal or Keycloak session revocation takes effect at the next refresh check, not instantaneously: a definite refusal from Keycloak (`invalid_grant`, a token for a different person, a bad signature) ends the session. If Keycloak cannot be reached, times out or fails, the session is kept and checked again after the next interval, so people already signed in keep working through an outage until their session expires.
 - Logout is POST-only and requires both a same-origin request and the session CSRF token. It deletes the website session, then redirects through Keycloak's OIDC end-session endpoint to end SSO.
 - The single-instance gateway coordinates concurrent refreshes in memory. Do not scale the web service to multiple replicas without revisiting refresh coordination and distributed rate limiting.
 - Notifications/read state are demo/session-local UI data. Sample tickets remain in browser local storage. All signed-in customer accounts currently see the same labeled **Oak House sample environment**; there is no claim of real tenant environment isolation or device integration.
@@ -105,14 +105,30 @@ Public account registration is disabled. Account provisioning is administrator-c
 
 | Endpoint | Behavior |
 | --- | --- |
-| `GET /api/auth/login` | Starts OIDC code + PKCE. Optional `returnTo` accepts only `/portal` or `/admin`. |
+| `GET /api/auth/login` | Starts OIDC code + PKCE. Optional `returnTo` accepts only `/admin`, `/portal`, `/me` or `/apps`. |
 | `GET /api/auth/callback` | One-time state/nonce/PKCE validation, authenticated subject and application role checks, session rotation. |
-| `GET /api/auth/session` | 401 when anonymous; otherwise returns the user profile, roles, logout CSRF token, and `sampleData: true`. Never returns OAuth tokens. |
+| `GET /api/auth/session` | 401 when anonymous; otherwise returns the user profile (`roles`, and `apps`: the ids of suite apps the person holds a role in), `apps: [{id, name, description, url}]` for the configured suite apps they can use (administrators: every configured app), the logout CSRF token, and `sampleData: true`. Never returns OAuth tokens. |
 | `POST /api/auth/logout` | Requires exact Origin and `x-csrf-token`; deletes local session and returns the identity-provider logout URL. |
 | `GET /api/auth/account` | Requires a session, then redirects to Keycloak account management. |
 | `GET /healthz` | Container-local HTTP liveness check only; blocked at the public proxy. |
+| `GET /internal/apps/<app>/owners/<user id>` | Internal owner check for suite apps' personal API tokens (see below); blocked at the public proxy. |
 
 No production ticket/device API exists. `/api/*` paths outside authentication return 404. Do not build real customer integrations on top of the sample browser storage.
+
+## HSL Suite apps (Slipway, Switchyard, Harbor Master, Tideline)
+
+The four suite apps keep their own addresses and sign in through this realm, each as its own confidential OIDC client. `suite-apps.json` lists them: client id, name, description, the `.env` variable that holds each one's origin, its callback path and its roles (highest first).
+
+1. In `deployment/.env`, set the origin of each app you run: `SLIPWAY_ORIGIN`, `SWITCHYARD_ORIGIN`, `HARBORMASTER_ORIGIN`, `TIDELINE_ORIGIN` (for example `https://slipway.hackspacelabs.com`, or `http://192.168.1.10:8080` for Switchyard on the LAN). A bare origin, no path. Blank leaves that app alone.
+2. Run the installer (or `docker compose --profile tools run --rm --no-deps -T configure-auth`). For each app with an origin it creates or updates the client: standard flow only, PKCE S256, full scope off, exactly one redirect URI `<origin><callback path>`, post-logout address `<origin>/signed-out`, the app's roles, an `HSL app roles` mapper that puts the person's roles for that app into `hsl_roles`, and the `basic`, `profile` and `email` scopes. The secret is derived from `OIDC_CLIENT_SECRET` (HMAC-SHA256 of `<client id>-v1`), so nothing new is stored. The portal client also gets an `hsl_apps.<id>` claim for each app, which is how `/apps` knows what someone can use.
+3. Two steps run **once** and are then left to administrators, marked by realm attributes: the session policy (`hsl.sessionPolicy`: 96 hours, 30 days with "Remember me", client sessions following the SSO session), and per app the first-rollout grant (`hsl.firstGrant.<id>`), which gives that app's `admin` role to everyone who holds the portal `admin` role at that moment, directly or through groups. Reruns never undo a session length changed on the Authentication page and never hand out the grant again, even if an app's roles were all removed on purpose. New installs import the same session policy from the realm template.
+4. Give each app its settings: from this folder, `node scripts/app-env.mjs <app> /path/to/that/app/.env`, then recreate the app's containers with `docker compose up -d` in its folder (a plain `docker compose restart` does not reread `.env`). Without Node on the host, run it in Docker, mounting the app's folder (the script replaces `.env` through a temporary file beside it): `docker run --rm --user "$(id -u):$(id -g)" -v "$PWD":/deployment -v /path/to/that/app:/app -w /deployment node:22-alpine node scripts/app-env.mjs <app> /app/.env`. The app's folder must be on this server. It writes `HSL_OIDC_ISSUER`, `HSL_OIDC_CLIENT_ID`, `HSL_OIDC_CLIENT_SECRET`, `HSL_PORTAL_URL` and `HSL_SUITE_APPS` (mode 600, names only on screen). For Switchyard and Tideline it also writes `CPM_PUBLIC_URL` / `TIDELINE_PUBLIC_URL`. Slipway's `SLIPWAY_BASE_URL` and Harbor Master's `PUBLIC_URL` are never changed: the script stops without writing if they differ from the origin here. It warns when Switchyard has no `CPM_SECRET_KEY`. Rerun it when an origin or this site's address changes.
+
+Access is managed in the portal under **Identity & access**: give app roles to people or to groups (groups nest, and members get the roles of every group above theirs), see each person's effective access with where it comes from, and see per app who can use it. No role for an app means no access to it. The four clients are read-only under Connected apps.
+
+**Owner check for personal API tokens.** Slipway and Harbor Master accept personal API tokens without a Keycloak session, so for an owner who signs in through HackSpaceLabs they ask the gateway whether that person is still enabled and still holds a role: `GET /internal/apps/<app id>/owners/<Keycloak user id>` with `Authorization: Bearer <that app's HSL_OIDC_CLIENT_SECRET>`. The answer is only `{"enabled": true|false, "roles": [...]}` (the app's effective roles, groups included, highest first; `[]` means no access; unknown, deleted and service accounts are `enabled: false`). Keycloak trouble is a `503`. Call the gateway directly (`http://<server>:<WEB_PORT>`), never through the public proxy: requests with forwarding headers, wrong secrets and unknown apps all get a plain `404`, and the proxy templates refuse `/internal/`.
+
+The apps find the gateway through `HSL_PORTAL_INTERNAL_URL`, which `app-env.mjs` writes for Slipway and Harbor Master: from `PORTAL_INTERNAL_URL` in `deployment/.env` (set it to the gateway's direct address, e.g. `http://192.168.1.10:8088`), or from this site's own address in LAN mode. Without it the apps run with the owner check off and say so at start; personal API tokens of people disabled in the portal then keep working until they are deactivated in the app too.
 
 ## “Sign in with HackSpaceLabs” for other applications
 
@@ -145,11 +161,12 @@ Implemented automated tests cover:
 
 - OIDC code exchange with actual HTTP discovery, JWKS, signed JWTs, and PKCE using a **test issuer**, not a real Keycloak container.
 - Anonymous denial, customer/admin roles, missing roles, email-free accounts, wrong signatures/issuer/audience/nonce, state tampering, and callback replay.
-- Session rotation, CSRF/origin checks, logout, role refresh, revoked refresh tokens, absolute expiration, safe redirect targets, and token-encryption tamper detection.
+- Session rotation, CSRF/origin checks, logout, role refresh, revoked refresh tokens, sessions and cookies ending with the Keycloak session (96 hours, 30 days, fallback), sessions kept through an identity-service outage, safe redirect targets, and token-encryption tamper detection.
+- App staff entry and `/apps`, the suite registry, `app-env.mjs`, app roles, nested groups, effective access and per-app access (against an in-memory stand-in for the Keycloak admin API), and the internal owner check.
 - Real temporary PostgreSQL: database initialization, persisted sessions reused by a second gateway instance, encrypted token storage, logout deletion, and restricted database privileges.
 - Production frontend build and Docker Compose configuration parsing.
 
-GitHub CI now verifies both Docker image builds, web startup with networking disabled, real Keycloak realm import, existing-realm URL migration, and a LAN OIDC authorization redirect. **Themed browser login/password-change/reset/MFA flows, public DNS/HTTPS, and the complete authenticated browser session still require verification on the target server.** No DNS changes or live accounts were created. The realm template includes the explicitly requested temporary website credential `admin` / `123456`; infrastructure secrets are generated privately on installation.
+GitHub CI now verifies both Docker image builds, web startup with networking disabled, real Keycloak realm import, existing-realm URL migration, a LAN OIDC authorization redirect, the four suite app clients (roles, mapper, derived secret, session policy, first-rollout grant), real sign-ins to them through the Keycloak login form (`hsl_roles`, `refresh_expires_in` 345600 or 2592000 with Remember me, nested groups and individual grants, the portal's `hsl_apps`), the owner check through the real management account, and that an installer rerun keeps the session policy and does not repeat the first-rollout grants. **Themed browser login/password-change/reset/MFA flows, public DNS/HTTPS, and the complete authenticated browser session still require verification on the target server.** No DNS changes or live accounts were created. The realm template includes the explicitly requested temporary website credential `admin` / `123456`; infrastructure secrets are generated privately on installation.
 
 Run protocol tests from the repository root:
 
@@ -180,12 +197,14 @@ Before enabling real users, verify customer login and admin denial in one browse
 
 ### Identity management in the HackSpaceLabs portal
 
-Administrators now have **Users**, **Groups**, **Connected apps**, and **Authentication** in the portal sidebar. These operate on live Keycloak records; the environment and support sections remain samples.
+Administrators now have **Users**, **Groups**, **App access**, **Connected apps**, and **Authentication** in the portal sidebar. These operate on live Keycloak records; the environment and support sections remain samples.
 
 - Users: create username accounts, edit optional profile fields, enable/disable access, assign portal roles and groups, set temporary passwords (required change next login, no email), and end sessions.
-- Groups: create/rename groups, view members and assign inherited portal roles. Create additional portal roles from either user or group details.
+- Users also show **App access** (per suite app, the role the app uses and where every role comes from: granted directly or from which group) and an **App roles** editor for direct grants.
+- Groups: create/rename groups, create groups inside groups, move or delete them (deleting asks for confirmation and says how many people lose the access, including members of groups inside it), add and remove members, assign inherited portal roles and app roles, and see what membership gives, including roles inherited from the groups above. An administrator cannot move or delete a group they belong to. Create additional portal roles from either user or group details.
+- App access: per suite app, everyone who can use it, with their role and where it comes from.
 - Connected apps: register OIDC apps using Authorization Code + PKCE S256, edit exact callback URLs and web origins, enable/disable apps, and reveal/rotate confidential client secrets. Internal platform clients are read-only to avoid breaking the portal login or management connection.
-- Authentication: view issuer/discovery URLs, configure password policy (blank removes additional requirements), self-registration, remember-me, brute-force protection, and provider token/session lifetimes. The web session also retains its own 30-minute idle and 8-hour absolute limits.
+- Authentication: view issuer/discovery URLs, configure password policy (blank removes additional requirements), self-registration, remember-me, brute-force protection, and provider token/session lifetimes. Portal and app sessions end when the Keycloak session ends, so these lengths (including the two remember-me lengths) are the only place to change them.
 
 Updating through `install.sh` provisions a dedicated `hackspacelabs-management` service account automatically. It is restricted to the HackSpaceLabs realm. Its secret is derived from the existing private OIDC client secret with a separate HMAC purpose; no new manual setup is needed. The web container does not receive infrastructure/bootstrap administrator credentials. Requests require a live admin role; writes additionally require the existing same-origin and CSRF checks. Secrets and passwords are never included in audit log messages. Management API failure does not affect public homepage or local health checks.
 

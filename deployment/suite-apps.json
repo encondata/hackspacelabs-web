@@ -1,0 +1,54 @@
+[
+  {
+    "id": "slipway",
+    "name": "Slipway",
+    "description": "Deploy GitHub repositories to Docker hosts",
+    "originEnv": "SLIPWAY_ORIGIN",
+    "publicUrlEnv": "SLIPWAY_BASE_URL",
+    "callbackPath": "/auth/hsl/callback",
+    "roles": {
+      "admin": "Slipway: full control, including users' tokens and audit",
+      "maintainer": "Slipway: manage hosts, instances and deployments",
+      "developer": "Slipway: sync repositories, operate instances and deploy",
+      "viewer": "Slipway: read-only"
+    }
+  },
+  {
+    "id": "switchyard",
+    "name": "Switchyard",
+    "description": "Proxy hosts and certificates",
+    "originEnv": "SWITCHYARD_ORIGIN",
+    "publicUrlEnv": "CPM_PUBLIC_URL",
+    "callbackPath": "/api/auth/oidc/callback",
+    "roles": {
+      "admin": "Switchyard: everything, including users and API keys",
+      "editor": "Switchyard: hosts, access rules, apply",
+      "viewer": "Switchyard: read-only"
+    }
+  },
+  {
+    "id": "harbormaster",
+    "name": "Harbor Master",
+    "description": "Boards, wiki and the Claude connector",
+    "originEnv": "HARBORMASTER_ORIGIN",
+    "publicUrlEnv": "PUBLIC_URL",
+    "callbackPath": "/api/auth/hsl/callback",
+    "roles": {
+      "admin": "Harbor Master: administrator",
+      "member": "Harbor Master: can sign in; projects are granted in Harbor Master"
+    }
+  },
+  {
+    "id": "tideline",
+    "name": "Tideline",
+    "description": "Log intake and search",
+    "originEnv": "TIDELINE_ORIGIN",
+    "publicUrlEnv": "TIDELINE_PUBLIC_URL",
+    "callbackPath": "/api/auth/oidc/callback",
+    "roles": {
+      "admin": "Tideline: everything, including users and API tokens",
+      "editor": "Tideline: sources and keys",
+      "viewer": "Tideline: search only"
+    }
+  }
+]

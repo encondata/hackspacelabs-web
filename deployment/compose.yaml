@@ -55,6 +55,10 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?Required}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Required}
       DATABASE_URL: postgres://hsl_web:${APP_DB_PASSWORD:?Required}@postgres:5432/hsl_sessions
+      SLIPWAY_ORIGIN: ${SLIPWAY_ORIGIN:-}
+      SWITCHYARD_ORIGIN: ${SWITCHYARD_ORIGIN:-}
+      HARBORMASTER_ORIGIN: ${HARBORMASTER_ORIGIN:-}
+      TIDELINE_ORIGIN: ${TIDELINE_ORIGIN:-}
     depends_on:
       postgres: {condition: service_healthy}
       keycloak: {condition: service_started}
@@ -71,10 +75,15 @@ services:
     entrypoint: [node, /tools/configure-auth.mjs]
     volumes:
       - ./scripts/configure-auth.mjs:/tools/configure-auth.mjs:ro
+      - ./suite-apps.json:/tools/suite-apps.json:ro
     environment:
       APP_ORIGIN: ${APP_ORIGIN:-https://${APP_HOST:-hackspacelabs.com}}
       AUTH_ORIGIN: ${AUTH_ORIGIN:-https://${AUTH_HOST:-auth.hackspacelabs.com}}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?Required}
+      SLIPWAY_ORIGIN: ${SLIPWAY_ORIGIN:-}
+      SWITCHYARD_ORIGIN: ${SWITCHYARD_ORIGIN:-}
+      HARBORMASTER_ORIGIN: ${HARBORMASTER_ORIGIN:-}
+      TIDELINE_ORIGIN: ${TIDELINE_ORIGIN:-}
       ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN:-bootstrap-admin}
       ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_PASSWORD:?Required}
     networks: [backend]

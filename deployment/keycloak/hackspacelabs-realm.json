@@ -8,7 +8,7 @@
   "duplicateEmailsAllowed": false,
   "resetPasswordAllowed": false,
   "verifyEmail": false,
-  "rememberMe": false,
+  "rememberMe": true,
   "editUsernameAllowed": false,
   "loginTheme": "hackspacelabs",
   "emailTheme": "keycloak",
@@ -19,15 +19,20 @@
   "maxFailureWaitSeconds": 900,
   "passwordPolicy": "length(14) and notUsername(undefined) and notEmail(undefined) and passwordHistory(5)",
   "accessTokenLifespan": 300,
-  "ssoSessionIdleTimeout": 1800,
-  "ssoSessionMaxLifespan": 28800,
-  "clientSessionIdleTimeout": 1800,
-  "clientSessionMaxLifespan": 28800,
+  "ssoSessionIdleTimeout": 345600,
+  "ssoSessionMaxLifespan": 345600,
+  "ssoSessionIdleTimeoutRememberMe": 2592000,
+  "ssoSessionMaxLifespanRememberMe": 2592000,
+  "clientSessionIdleTimeout": 0,
+  "clientSessionMaxLifespan": 0,
   "revokeRefreshToken": false,
   "eventsEnabled": true,
   "eventsExpiration": 604800,
   "adminEventsEnabled": true,
   "adminEventsDetailsEnabled": false,
+  "attributes": {
+    "hsl.sessionPolicy": "1"
+  },
   "roles": {
     "client": {
       "hackspacelabs-web": [

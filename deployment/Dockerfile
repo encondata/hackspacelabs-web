@@ -13,6 +13,8 @@ COPY selfhost/package.json selfhost/package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY --from=build /src/selfhost/dist ./dist
 COPY selfhost/server ./server
+# The HSL Suite app registry, read by the gateway (selfhost/server/suite-apps.mjs).
+COPY deployment/suite-apps.json ./suite-apps.json
 USER node
 EXPOSE 3000
 CMD ["node", "server/index.mjs"]
