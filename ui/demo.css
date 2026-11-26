@@ -1,0 +1,257 @@
+/* Styles for demo.html only: stand-ins for app components and the demo controls. Not part of the kit. */
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.demo-bar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: #1b2530;
+  color: #e2e8ef;
+  font-size: 13px;
+}
+
+.demo-bar strong {
+  margin-right: 6px;
+}
+
+.demo-bar button {
+  padding: 4px 12px;
+  border: 1px solid #4a5867;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.demo-bar button[aria-pressed='true'] {
+  border-color: #fff;
+  background: #fff;
+  color: #1b2530;
+}
+
+.demo-bar button:focus-visible {
+  outline: 2px solid #74d4ec;
+  outline-offset: 2px;
+}
+
+.demo-bar output {
+  flex-basis: 100%;
+  white-space: pre-wrap;
+}
+
+.demo-bar output:empty {
+  display: none;
+}
+
+/* The frame fills the window under the demo bar. */
+[data-demo] .hsl-shell,
+[data-demo] .hsl-auth {
+  min-height: calc(100vh - 44px);
+}
+
+[data-demo] .hsl-sidebar {
+  top: 44px;
+  height: calc(100vh - 44px);
+}
+
+[data-demo] .hsl-topbar {
+  top: 44px;
+}
+
+@media (max-width: 900px) {
+  [data-demo] .hsl-sidebar {
+    height: auto;
+  }
+}
+
+.hsl-content h1,
+.demo-tokens h1 {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 650;
+}
+
+.hsl-content:focus {
+  outline: none;
+}
+
+.demo-muted {
+  margin: 0;
+  color: var(--muted);
+}
+
+.demo-head,
+.demo-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.demo-row {
+  justify-content: flex-start;
+}
+
+.demo-card {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.demo-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.demo-table caption {
+  padding: 10px 16px 0;
+  text-align: left;
+  font-size: 0.85rem;
+}
+
+.demo-table th,
+.demo-table td {
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.demo-table th {
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.demo-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.demo-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--off-bg);
+  color: var(--off);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.demo-pill.is-ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.demo-pill.is-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.demo-pill.is-bad {
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+
+.demo-button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-ctl);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.demo-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.demo-button.is-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.demo-button.is-primary:hover {
+  background: var(--accent-hover);
+  color: var(--accent-text);
+}
+
+.demo-log {
+  margin: 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  color: var(--text);
+  font: 13px/1.7 var(--mono);
+}
+
+.demo-warn {
+  color: var(--warn);
+}
+
+.demo-bad {
+  color: var(--bad);
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+
+.demo-tokens {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 1100px;
+  padding: 28px 24px;
+}
+
+.demo-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.demo-swatch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  background: var(--surface);
+  font-size: 0.85rem;
+}
+
+.demo-chip {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
