@@ -101,9 +101,9 @@
 .p-search input{border:0;outline:0;background:transparent;width:100%;padding:9px 0;font-size:14px;color:var(--text)}
 .p-search:focus-within{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 .p-table-wrap{overflow-x:auto}
-.p-shell table{border-collapse:collapse;width:100%;text-align:left;font-size:14px}
-.p-shell th{font-size:12px;font-weight:600;color:var(--muted);background:var(--surface-2);padding:11px 20px;white-space:nowrap}
-.p-shell td{padding:16px 20px;border-top:1px solid var(--border);color:var(--muted);white-space:normal;overflow-wrap:anywhere}
+:where(.p-shell) table{border-collapse:collapse;width:100%;text-align:left;font-size:14px}
+:where(.p-shell) th{font-size:12px;font-weight:600;color:var(--muted);background:var(--surface-2);padding:11px 20px;white-space:nowrap}
+:where(.p-shell) td{padding:16px 20px;border-top:1px solid var(--border);color:var(--muted);white-space:normal;overflow-wrap:anywhere}
 .p-table-system{display:flex;align-items:center;gap:12px}
 .p-table-system>div{min-width:0}
 .p-table-system strong{display:block;color:var(--text);font-size:14px;font-weight:500}
