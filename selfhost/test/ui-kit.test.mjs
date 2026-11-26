@@ -69,6 +69,8 @@ test('kit classes on a <button> set their own hover colours, so an app button:ho
   const body=hover(sel);
   for(const prop of ['background','border-color','color'])assert.match(body,new RegExp(`(^|[;\\s])${prop}\\s*:`),sel+' sets no '+prop);
  }
+ for(const sel of ['.hsl-brand:hover','.hsl-nav-item:hover','.hsl-switcher-app:hover','.hsl-menu-item:hover','.hsl-auth-button:hover'])
+  assert.match(hover(sel),/text-decoration\s*:\s*none/,sel+' may underline under an app a:hover rule');
  const nav=hover('.hsl-nav-item:hover');
  for(const prop of ['background','color'])assert.match(nav,new RegExp(`(^|[;\\s])${prop}\\s*:`),'.hsl-nav-item:hover sets no '+prop);
 });
