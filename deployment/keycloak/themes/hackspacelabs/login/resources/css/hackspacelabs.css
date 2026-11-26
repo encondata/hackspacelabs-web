@@ -1,2 +1,369 @@
-/* Inherit Keycloak's maintained templates, including reset, MFA, passkeys, and errors. */
-:root{color-scheme:light}.login-pf body{background:#faf9f6;color:#123947;font-family:Arial,Helvetica,sans-serif}.login-pf-page{padding:3vw;min-height:100vh}#kc-header{color:#123947;margin:0 0 4vw}#kc-header-wrapper{font-size:0;height:100px;padding:0;background:url('../img/logo.png') no-repeat center;background-size:auto 135px;mix-blend-mode:multiply}.card-pf{width:65%;max-width:none;padding:3vw 4vw;background:white;border:1px solid #dedfd8;border-top:3px solid #e8652b;box-shadow:none;border-radius:5px}.login-pf-page .card-pf{max-width:none}#kc-page-title{font-size:32px;font-weight:500;letter-spacing:-1px;color:#123947}a{color:#126476}a:hover{color:#e8652b}.form-control{height:45px;border:1px solid #b9c4c6;border-radius:4px;box-shadow:none;font-size:16px}.form-control:focus{border-color:#0796a9;box-shadow:0 0 0 2px #0796a933}.btn-primary{background:#08364b;border:0;border-radius:4px;box-shadow:none;text-shadow:none;padding:13px 20px}.btn-primary:hover,.btn-primary:focus{background:#14536b}.control-label{font-weight:500;color:#123947}.login-pf-page .login-pf-signup{color:#627177}#kc-info-wrapper{background:#f2f3ee;border-top:1px solid #dedfd8}.alert-error{border-color:#d58a73}.pf-c-button.pf-m-control{border:1px solid #b9c4c6}.kc-social-links{margin-top:20px}@media(max-width:700px){.card-pf{width:100%;padding:24px}.login-pf-page{padding:5vw}#kc-header-wrapper{height:80px;background-size:auto 100px}#kc-page-title{font-size:27px}}
+/*
+ * HackSpaceLabs sign-in pages: Keycloak's maintained templates (sign-in, errors, password change,
+ * sign-out, MFA, passkeys) drawn as the HSL Suite sign-in card. Colours, fonts and radii come from the
+ * kit's tokens (../hsl-ui/tokens.css, synced; never edit it). Keep the ids username, password,
+ * rememberMe and kc-login: every app's sign-in and the acceptance tests use them.
+ */
+
+/* ---------- Page ---------- */
+html.login-pf,
+.login-pf body {
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-feature-settings: 'cv11', 'ss01';
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.login-pf-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px 16px;
+}
+
+.login-pf a {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.login-pf a:hover,
+.login-pf a:focus {
+  color: var(--accent-hover);
+}
+
+.login-pf :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- Brand: the H mark and the wordmark ---------- */
+.login-pf-page .login-pf-page-header,
+#kc-header {
+  width: 100%;
+  max-width: 400px;
+  margin: 0 0 1.25rem;
+  padding: 0;
+}
+
+#kc-header-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 0;
+  color: var(--logo-ink);
+  font-family: var(--font-brand);
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+#kc-header-wrapper::before {
+  content: '';
+  flex: none;
+  width: 44px;
+  height: 41px;
+  background: url('../hsl-ui/mark.svg') no-repeat center / contain;
+}
+
+/* ---------- The card ---------- */
+.login-pf-page .card-pf,
+.card-pf {
+  width: 100%;
+  max-width: 400px;
+  margin: 0;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+}
+
+.login-pf-page .login-pf-header,
+.login-pf-header {
+  margin: 0 0 1rem;
+  padding: 0;
+}
+
+#kc-page-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.1rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.3;
+  text-align: center;
+}
+
+#kc-content-wrapper,
+#kc-form-wrapper {
+  margin: 0;
+}
+
+.login-pf .form-group {
+  margin-bottom: 0.85rem;
+}
+
+.login-pf .instruction,
+#kc-info-message,
+.login-pf .content-area p {
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ---------- Fields ---------- */
+.login-pf .control-label,
+.login-pf .pf-c-form__label,
+.login-pf .pf-c-form__label-text {
+  display: inline-block;
+  margin-bottom: 0.35rem;
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.login-pf .pf-c-form-control,
+.login-pf .form-control {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-ctl);
+  background: var(--surface);
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+.login-pf .pf-c-form-control:hover,
+.login-pf .form-control:hover {
+  border-color: var(--border-strong);
+}
+
+.login-pf .pf-c-form-control:focus,
+.login-pf .form-control:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  outline: none;
+}
+
+.login-pf .pf-c-form-control[aria-invalid='true'],
+.login-pf .form-control[aria-invalid='true'] {
+  border-color: var(--bad);
+  background-image: none;
+  padding-right: 12px;
+}
+
+/* Password field and its show/hide button, joined into one control. */
+.login-pf .pf-c-input-group {
+  display: flex;
+}
+
+.login-pf .pf-c-input-group > .pf-c-form-control {
+  border-right: 0;
+  border-radius: var(--radius-ctl) 0 0 var(--radius-ctl);
+}
+
+.login-pf .pf-c-input-group > .pf-c-form-control:focus {
+  border-right: 1px solid var(--accent);
+}
+
+.login-pf .pf-c-button.pf-m-control {
+  flex: none;
+  width: 44px;
+  height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: 0 var(--radius-ctl) var(--radius-ctl) 0;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.login-pf .pf-c-button.pf-m-control::after {
+  border: 0;
+}
+
+.login-pf .pf-c-button.pf-m-control:hover {
+  color: var(--text);
+}
+
+.login-pf .pf-c-form__helper-text.pf-m-error,
+#input-error,
+.login-pf .kc-feedback-text {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--bad);
+  font-size: 0.85rem;
+}
+
+/* "Keep me signed in on this device" */
+#kc-form-options .checkbox {
+  margin: 0;
+}
+
+#kc-form-options .checkbox label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+#kc-form-options .checkbox input[type='checkbox'] {
+  position: static;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.login-pf .login-pf-settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 1.1rem;
+}
+
+/* ---------- Buttons ---------- */
+.login-pf .pf-c-button.pf-m-primary,
+.login-pf .btn-primary {
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-ctl);
+  background: var(--accent);
+  box-shadow: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-shadow: none;
+}
+
+.login-pf .pf-c-button.pf-m-primary::after {
+  border: 0;
+}
+
+.login-pf .pf-c-button.pf-m-primary:hover,
+.login-pf .pf-c-button.pf-m-primary:focus,
+.login-pf .btn-primary:hover,
+.login-pf .btn-primary:focus {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+  color: var(--accent-text);
+}
+
+.login-pf .pf-c-button.pf-m-secondary,
+.login-pf .btn-default {
+  min-height: 42px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-ctl);
+  background: var(--surface);
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+}
+
+.login-pf .pf-c-button.pf-m-secondary::after {
+  border: 0;
+}
+
+.login-pf .pf-c-button.pf-m-secondary:hover,
+.login-pf .btn-default:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ---------- Messages ---------- */
+.login-pf .alert,
+.login-pf .pf-c-alert {
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--bad-border);
+  border-radius: var(--radius-ctl);
+  background: var(--bad-bg);
+  box-shadow: none;
+  color: var(--bad);
+  font-size: 0.92rem;
+}
+
+.login-pf .pf-c-alert::before {
+  display: none;
+}
+
+.login-pf .alert-warning,
+.login-pf .pf-c-alert.pf-m-warning {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.login-pf .alert-success,
+.login-pf .pf-c-alert.pf-m-success,
+.login-pf .alert-info,
+.login-pf .pf-c-alert.pf-m-info {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.login-pf .pf-c-alert__title,
+.login-pf .kc-feedback-text {
+  color: inherit;
+  font-size: inherit;
+  font-weight: 500;
+}
+
+.login-pf .pf-c-alert__icon,
+.login-pf .alert .pficon {
+  color: inherit;
+}
+
+/* Links and notes under the form (try another way, back to the app, and so on). */
+#kc-info,
+#kc-info-wrapper {
+  margin-top: 1rem;
+  padding: 0.85rem 0 0;
+  border-top: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-align: center;
+}
+
+.login-pf-page .login-pf-signup {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.kc-social-links {
+  margin-top: 1rem;
+}
+
+#kc-locale ul {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+@media (max-width: 480px) {
+  .login-pf-page .card-pf,
+  .card-pf {
+    padding: 22px 18px;
+  }
+}

@@ -24,6 +24,8 @@ jobs:
       - run: npm test
       - run: python3 deployment/tests/test_installer.py
       - run: bash -n install.sh deployment/scripts/setup.sh deployment/postgres/init.sh
+      - name: The Keycloak theme's copy of the HSL Suite kit is unedited
+        run: bash scripts/sync-hsl-ui.sh --check deployment/keycloak/themes/hackspacelabs/login/resources/hsl-ui
       - name: Validate Compose (disposable configuration only)
         run: docker compose -f deployment/compose.yaml config --quiet
         env:
