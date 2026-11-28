@@ -39,6 +39,9 @@ services:
       postgres: {condition: service_healthy}
     networks: [backend]
   web:
+    # A fixed name, so configure-auth (below) finds this image whatever the compose project is called;
+    # under Slipway the project is slipway-<slug>, not hackspacelabs.
+    image: hackspacelabs-web
     ports: ["${BIND_ADDRESS:-0.0.0.0}:${WEB_PORT:-8088}:3000"]
     build:
       context: ..
